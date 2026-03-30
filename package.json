@@ -1,0 +1,50 @@
+{
+  "name": "be",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "nodemon server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.0",
+  "dependencies": {
+    "agora-token": "^2.0.5",
+    "autocannon": "^8.0.0",
+    "axios": "^1.14.0",
+    "backblaze-b2": "^1.7.1",
+    "bcryptjs": "^3.0.3",
+    "canvas": "^3.2.2",
+    "cloudinary": "^2.9.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.1",
+    "google-auth-library": "^10.5.0",
+    "joi": "^18.0.2",
+    "jsonwebtoken": "^9.0.3",
+    "mime-types": "^3.0.2",
+    "mongoose": "^9.2.1",
+    "multer": "^2.0.2",
+    "multer-storage-cloudinary": "^4.0.0",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.1",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "pdfkit": "^0.17.2",
+    "qrcode": "^1.5.4",
+    "rate-limit-redis": "^4.3.1",
+    "razorpay": "^2.9.6",
+    "redis": "^5.11.0",
+    "sharp": "^0.34.5",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
