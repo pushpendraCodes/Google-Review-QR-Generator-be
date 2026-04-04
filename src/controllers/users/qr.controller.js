@@ -1,21 +1,188 @@
 import QRCode from "../../models/QRCode.js";
 import ScanLog from "../../models/ScanLog.js";
-import User from "../../models/User.js";
+// import User from "../../models/User.js";
 import { generateQRPng, generateQRSvg, generateQRPdf } from "../../services/qr.service.js";
 import { uploadToB2 } from "../../services/b2.service.js";
-import { buildReviewUrl, getPlaceDetails } from "../../services/places.service.js";
-import { generateShortCode, QR_LIMITS } from "../../utils/helpers.js";
+import { buildReviewUrl } from "../../services/places.service.js";
+import { dataURLtoBuffer, generateShortCode, QR_LIMITS, canUseFeature } from "../../utils/helpers.js";
 import { getCache, setCache, delCache, invalidatePattern } from "../../utils/cache.js";
 import axios from "axios";
+import { deleteFromCloudinary, uploadToCloudinary } from "../../services/cloudinary.service.js";
+import QRDownload from "../../models/QRDownload.js";
 
 // ─── Generate QR ──────────────────────────────────────────────────────────────
 // POST /api/qr/generate
 // Body: { placeId, format, color?, logoUrl?, label? }
+
+
+
+
+
+
 export const generateQR = async (req, res) => {
   try {
-    const { placeId, format = "png", color = "#000000", logoUrl, label } = req.body;
+    const {
+      // Place
+      placeId,
+      businessName,
+      placeAddress = "",
+      placeRating = 0,
+      totalReviews = 0,
+      label,
 
-    if (!placeId) return res.status(400).json({ message: "placeId is required." });
+      // Download format (for logging only — file is generated on frontend)
+      format = "png",
+
+      // QR config
+      color = "#1D9E75",
+      shape = "square",
+      logoData = null,            // base64 data-URI from frontend upload
+
+      // Standee config
+      template = "minimal",
+      bgColor = "",
+      socialProof = "",
+      language = "en",
+      whiteLabel = { enabled: false, clientName: "" },
+    } = req.body;
+
+    if (!placeId) return res.status(400).json({ success: false, message: "placeId is required." });
+    if (!businessName) return res.status(400).json({ success: false, message: "businessName is required." });
+
+    const user = req.user;
+    const plan = user.plan;
+
+    // ── Format gate ────────────────────────────────────────────────────────────
+    if (format !== "png" && !canUseFeature(plan, "svgPdf")) {
+      return res.status(403).json({
+        success: false,
+        message: "SVG/PDF download requires Starter plan or above.",
+        upgrade: true,
+      });
+    }
+
+    // ── Check if QR already exists for this user+business ──────────────────────
+    const existing = await QRCode.findOne({ owner: user._id, placeId });
+
+    if (!existing) {
+      // ── NEW QR: check plan limit ─────────────────────────────────────────────
+      const qrLimit = QR_LIMITS[plan] ?? 1;
+      const currentCount = await QRCode.countDocuments({ owner: user._id, status: "active" });
+
+      if (currentCount >= qrLimit) {
+        return res.status(403).json({
+          success: false,
+          message: `Your ${plan} plan allows ${qrLimit} active QR code(s). Upgrade to create more.`,
+          upgrade: true,
+        });
+      }
+    }
+
+    // ── Build sanitised configs (strip features the plan doesn't allow) ─────────
+    const qrConfig = {
+      color: canUseFeature(plan, "customColor") ? color : "#1D9E75",
+      shape: canUseFeature(plan, "customShape") ? shape : "square",
+      logoUrl: "",  // filled below if logo uploaded
+    };
+
+    const standeeConfig = {
+      template: canUseFeature(plan, "standeeExtras") ? template : "minimal",
+      bgColor: canUseFeature(plan, "standeeExtras") ? bgColor : "",
+      socialProof: canUseFeature(plan, "standeeExtras") ? socialProof : "",
+      language: canUseFeature(plan, "standeeExtras") ? language : "en",
+      whiteLabel: {
+        enabled: canUseFeature(plan, "whiteLabel") ? whiteLabel.enabled : false,
+        clientName: canUseFeature(plan, "whiteLabel") ? whiteLabel.clientName : "",
+      },
+    };
+
+    // ── Logo upload (pro+ only) ────────────────────────────────────────────────
+    if (logoData && canUseFeature(plan, "logo")) {
+      try {
+        // Use stable public_id so re-uploads overwrite instead of creating dupes
+        const fileName = `logos_${user._id}_${placeId}`;
+        const buffer = dataURLtoBuffer(logoData);
+        qrConfig.logoUrl = await uploadToCloudinary(buffer, fileName, "business_logo");
+      } catch (err) {
+        console.error("Logo upload failed, continuing without logo:", err.message);
+        // Non-fatal — proceed without logo
+      }
+    }
+
+    // ── Preserve existing logoUrl if no new logo was uploaded ─────────────────
+    if (!logoData && existing?.qrConfig?.logoUrl) {
+      qrConfig.logoUrl = existing.qrConfig.logoUrl;
+    }
+
+    const reviewUrl = buildReviewUrl(placeId);
+    const hasWatermark = plan === "free";
+
+    // ── Upsert: update config if existing, create if new ──────────────────────
+    const qr = await QRCode.findOneAndUpdate(
+      { owner: user._id, placeId },
+      {
+        $set: {
+          businessName: label || businessName,
+          label: label || businessName,
+          placeAddress,
+          placeRating,
+          totalReviews,
+          reviewUrl,
+          qrConfig,
+          standeeConfig,
+          hasWatermark,
+          status: "active",
+        },
+        // Only set shortCode and owner on insert, never overwrite
+        $setOnInsert: {
+          owner: user._id,
+          placeId,
+          shortCode: generateShortCode(),
+        },
+      },
+      {
+        upsert: true,
+        new: true,          // return the updated doc
+        runValidators: true,
+      }
+    );
+
+    // ── Log this download event (for analytics — never blocks the response) ────
+    QRDownload.create({
+      qrCodeId: qr._id,
+      owner: user._id,
+      format,
+      planAtTime: plan,
+    }).catch(err => console.error("Download log failed:", err.message));
+
+    // ── Invalidate caches ──────────────────────────────────────────────────────
+    const uid = user._id.toString();
+    await Promise.all([
+      invalidatePattern(`qr:list:${uid}:*`),
+      invalidatePattern(`analytics:*:${uid}:*`),
+      existing ? delCache(`qr:detail:${uid}:${qr._id}`) : Promise.resolve(),
+    ]);
+
+    return res.status(existing ? 200 : 201).json({
+      success: true,
+      message: existing ? "QR config updated." : "QR code created.",
+      isNew: !existing,
+      qr,
+    });
+
+  } catch (err) {
+    // Duplicate key on shortCode is extremely rare but handle it
+    if (err.code === 11000 && err.keyPattern?.shortCode) {
+      return res.status(500).json({ success: false, message: "Collision on shortCode, please retry." });
+    }
+    console.error("QR generate error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+export const checkUserPlan = async (req, res) => {
+  try {
 
     const user = req.user;
     const plan = user.plan;
@@ -28,97 +195,19 @@ export const generateQR = async (req, res) => {
       return res.status(403).json({
         message: `Your ${plan} plan allows a maximum of ${qrLimit} active QR code(s). Please upgrade to create more.`,
         upgrade: true,
+        success: false,
       });
     }
-
-    // ── Plan feature checks ────────────────────────────────────────────────────
-    const canCustomColor = ["starter", "pro", "agency"].includes(plan);
-    const canLogo = ["pro", "agency"].includes(plan);
-    const canSvgPdf = ["starter", "pro", "agency"].includes(plan);
-    const hasWatermark = plan === "free";
-
-    if (format !== "png" && !canSvgPdf) {
-      return res.status(403).json({ message: "SVG/PDF download requires Starter plan or above." });
-    }
-
-    // ── Fetch place details from Google ────────────────────────────────────────
-    let placeDetails;
-    try {
-      placeDetails = await getPlaceDetails(placeId);
-    } catch {
-      return res.status(400).json({ message: "Invalid placeId or unable to fetch place details." });
-    }
-
-    const reviewUrl = buildReviewUrl(placeId);
-    const shortCode = generateShortCode();
-    const redirectUrl = `${process.env.BACKEND_URL || process.env.FRONTEND_URL}/r/${shortCode}`;
-
-    // ── Download logo buffer if provided ────────────────────────────────────────
-    let logoBuf = null;
-    if (logoUrl && canLogo) {
-      try {
-        const resp = await axios.get(logoUrl, { responseType: "arraybuffer", timeout: 5000 });
-        logoBuf = Buffer.from(resp.data);
-      } catch {
-        // Logo fetch failed — proceed without logo
-      }
-    }
-
-    const effectiveColor = canCustomColor ? color : "#000000";
-
-    // ── Generate QR buffer ─────────────────────────────────────────────────────
-    let fileBuffer;
-    let mimeType;
-    let fileExt;
-
-    if (format === "svg") {
-      fileBuffer = await generateQRSvg(redirectUrl, effectiveColor);
-      mimeType = "image/svg+xml";
-      fileExt = "svg";
-    } else if (format === "pdf") {
-      const pngBuf = await generateQRPng(redirectUrl, effectiveColor, logoBuf, hasWatermark);
-      fileBuffer = await generateQRPdf(redirectUrl, placeDetails.name, pngBuf);
-      mimeType = "application/pdf";
-      fileExt = "pdf";
-    } else {
-      fileBuffer = await generateQRPng(redirectUrl, effectiveColor, logoBuf, hasWatermark);
-      mimeType = "image/png";
-      fileExt = "png";
-    }
-
-    // ── Upload to Backblaze B2 ─────────────────────────────────────────────────
-    const b2FileName = `qrcodes/${user._id}/${shortCode}.${fileExt}`;
-    const qrImageUrl = await uploadToB2(fileBuffer, b2FileName, mimeType);
-
-    // ── Save to DB ─────────────────────────────────────────────────────────────
-    const qr = await QRCode.create({
-      owner: user._id,
-      businessName: label || placeDetails.name,
-      placeId,
-      placeAddress: placeDetails.address,
-      reviewUrl,
-      qrImageUrl,
-      format,
-      customColor: effectiveColor,
-      logoUrl: canLogo && logoUrl ? logoUrl : "",
-      hasWatermark,
-      shortCode,
-      label: label || placeDetails.name,
-      status: "active",
-    });
-
-    // Invalidate QR list & analytics caches for this user
-    const userId = user._id.toString();
-    await invalidatePattern(`qr:list:${userId}:*`);
-    await invalidatePattern(`analytics:*:${userId}:*`);
-
-    res.status(201).json({
-      message: "QR code generated successfully.",
-      qr,
+    res.status(200).json({
+      success: true,
+      message: "User plan checked successfully.",
+      plan,
+      qrLimit,
+      currentCount,
     });
   } catch (err) {
-    console.error("QR generate error:", err);
-    res.status(500).json({ message: err.message });
+    console.error("User plan check error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -193,25 +282,71 @@ export const getQRCode = async (req, res) => {
 // ─── Update QR ────────────────────────────────────────────────────────────────
 export const updateQRCode = async (req, res) => {
   try {
-    const { label, color, logoUrl } = req.body;
+    const {
+      label,
+      // qrConfig fields
+      color, shape, logoData,
+      // standeeConfig fields
+      template, bgColor, socialProof, language, whiteLabel,
+    } = req.body;
+
     const qr = await QRCode.findOne({ _id: req.params.id, owner: req.user._id });
-    if (!qr) return res.status(404).json({ message: "QR code not found." });
+    if (!qr) return res.status(404).json({ success: false, message: "QR code not found." });
 
     const plan = req.user.plan;
+
+    // ── Label (any plan) ───────────────────────────────────────────────────────
     if (label !== undefined) qr.label = label;
-    if (color && ["starter", "pro", "agency"].includes(plan)) qr.customColor = color;
-    if (logoUrl !== undefined && ["pro", "agency"].includes(plan)) qr.logoUrl = logoUrl;
+
+    // ── QR config ─────────────────────────────────────────────────────────────
+    if (color !== undefined && canUseFeature(plan, "customColor")) {
+      qr.qrConfig.color = color;
+    }
+    if (shape !== undefined && canUseFeature(plan, "customShape")) {
+      qr.qrConfig.shape = shape;
+    }
+
+    // Logo upload
+    if (logoData && canUseFeature(plan, "logo")) {
+      try {
+
+        if (qr.qrConfig.logoUrl) {
+          await deleteFromCloudinary(qr.qrConfig.logoUrl);
+        }
+
+        const fileName = `logos_${req.user._id}_${qr.placeId}`;
+        const buffer = dataURLtoBuffer(logoData);
+        qr.qrConfig.logoUrl = await uploadToCloudinary(buffer, fileName, "business_logo");
+      } catch (err) {
+        console.error("Logo update failed:", err.message);
+      }
+    }
+
+    // ── Standee config ────────────────────────────────────────────────────────
+    if (canUseFeature(plan, "standeeExtras")) {
+      if (template !== undefined) qr.standeeConfig.template = template;
+      if (bgColor !== undefined) qr.standeeConfig.bgColor = bgColor;
+      if (socialProof !== undefined) qr.standeeConfig.socialProof = socialProof;
+      if (language !== undefined) qr.standeeConfig.language = language;
+    }
+
+    if (whiteLabel !== undefined && canUseFeature(plan, "whiteLabel")) {
+      qr.standeeConfig.whiteLabel = whiteLabel;
+    }
 
     await qr.save();
 
-    // Invalidate caches
-    const userId = req.user._id.toString();
-    await delCache(`qr:detail:${userId}:${req.params.id}`);
-    await invalidatePattern(`qr:list:${userId}:*`);
+    const uid = req.user._id.toString();
+    await Promise.all([
+      delCache(`qr:detail:${uid}:${req.params.id}`),
+      invalidatePattern(`qr:list:${uid}:*`),
+    ]);
 
-    res.json({ message: "QR code updated.", qr });
+    return res.json({ success: true, message: "QR code updated.", qr });
+
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("QR update error:", err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 

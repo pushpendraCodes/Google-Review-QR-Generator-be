@@ -10,13 +10,14 @@ import qrRoutes from "./routes/qr.routes.js";
 import subscriptionRoutes from "./routes/subscription.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
 import placesRoutes from "./routes/places.routes.js";
+import contactRoutes from "./routes/contactRoute.js";
 
 const app = express();
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 app.use(
   cors({
-    origin: "*",
+    origin: "http://localhost:5173",
     credentials: true,
   })
 );
@@ -41,6 +42,7 @@ app.use("/api/subscription", subscriptionRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/places", placesRoutes);         // business search
 app.use("/r", qrRoutes);                      // scan redirect /r/:shortCode
+app.use("/api/contact", contactRoutes);
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => res.json({ status: "ok" }));

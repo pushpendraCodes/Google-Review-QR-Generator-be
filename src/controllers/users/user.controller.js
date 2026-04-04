@@ -2,7 +2,7 @@ import User from "../../models/User.js";
 import Transaction from "../../models/Transaction.js";
 import QRCode from "../../models/QRCode.js";
 import { getCache, setCache, delCache } from "../../utils/cache.js";
-import { uploadToB2, deleteFromB2 } from "../../services/b2.service.js";
+import { uploadToCloudinary, deleteFromCloudinary } from "../../services/cloudinary.service.js";
 
 
 
@@ -21,7 +21,7 @@ const uploadFileToB2 = async (file, folder, userId) => {
   const isPdf = file.mimetype === "application/pdf";
   const ext = isPdf ? "pdf" : file.mimetype.split("/")[1];
   const fileName = `${folder}/${userId}_${Date.now()}.${ext}`;
-  return uploadToB2(file.buffer, fileName, file.mimetype);
+  return uploadToCloudinary(file.buffer, fileName, "profile_pictures");
 };
 
 // ─── Get profile ──────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ export const updateProfile = async (req, res) => {
     // ── Upload new profile picture if attached ────────────────────────────────
     if (req.file) {
       const oldPath = extractB2Path(user?.picture);
-      if (oldPath) await deleteFromB2(oldPath);
+      if (oldPath) await deleteFromCloudinary(oldPath);
 
       user.picture = await uploadFileToB2(req.file, "profile-pictures", req.user._id);
     }

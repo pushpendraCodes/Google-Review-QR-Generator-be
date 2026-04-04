@@ -12,7 +12,7 @@ const generateOTP = () =>
 // ─── Access Token (short-lived: 15 minutes) ───────────────────────────────────
 const signAccessToken = (userId) =>
   jwt.sign({ id: userId }, process.env.ACCESS_TOKEN_SECRET, {
-    expiresIn: process.env.ACCESS_TOKEN_EXPIRE || "15m",
+    expiresIn: process.env.ACCESS_TOKEN_EXPIRE || "1m",
   });
 
 // ─── Refresh Token (long-lived: 7 days) ──────────────────────────────────────
@@ -44,6 +44,24 @@ const PLAN_PRICES = {
 
 // QR limits per plan
 const QR_LIMITS = { free: 1, starter: 3, pro: 10, agency: Infinity };
+// ── Plan feature gates ─────────────────────────────────────────────────────────
+const canUseFeature = (plan, feature) => {
+  const gates = {
+    customColor: ["starter", "pro", "agency"],
+    customShape: ["pro", "agency"],
+    logo: ["pro", "agency"],
+    svgPdf: ["starter", "pro", "agency"],
+    standeeExtras: ["pro", "agency"],  // template, bgColor, socialProof, language
+    whiteLabel: ["agency"],
+  };
+  return gates[feature]?.includes(plan) ?? false;
+};
+
+// Convert Data URL to Buffer
+function dataURLtoBuffer(dataUrl) {
+  const base64Data = dataUrl.split(",")[1]; // remove "data:image/png;base64,"
+  return Buffer.from(base64Data, "base64");
+}
 
 export {
   generateShortCode,
@@ -54,4 +72,6 @@ export {
   getPlanExpiry,
   PLAN_PRICES,
   QR_LIMITS,
+  dataURLtoBuffer,
+  canUseFeature
 };

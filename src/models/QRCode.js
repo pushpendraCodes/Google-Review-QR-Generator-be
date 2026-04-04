@@ -1,37 +1,60 @@
 import mongoose from "mongoose";
 
+// ── Sub-schemas ────────────────────────────────────────────────────────────────
+const qrConfigSchema = new mongoose.Schema({
+  color: { type: String, default: "#1D9E75" },
+  shape: { type: String, enum: ["square", "rounded", "dots", "classy", "extra-rounded"], default: "square" },
+  logoUrl: { type: String, default: "" },        // Cloudinary CDN URL
+}, { _id: false });
+
+const standeeConfigSchema = new mongoose.Schema({
+  template: { type: String, enum: ["minimal", "luxury", "bold", "festive"], default: "minimal" },
+  bgColor: { type: String, default: "" },
+  socialProof: { type: String, default: "" },
+  language: { type: String, enum: ["en", "hi", "mr", "ta", "te"], default: "en" },
+  whiteLabel: {
+    enabled: { type: Boolean, default: false },
+    clientName: { type: String, default: "" },
+  },
+}, { _id: false });
+
+// ── Main schema ────────────────────────────────────────────────────────────────
 const qrCodeSchema = new mongoose.Schema(
   {
     owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     businessName: { type: String, required: true, trim: true },
+    label: { type: String, default: "" },
 
-    // Place info (from Google Places API search)
+    // Google Place info
     placeId: { type: String, required: true },
     placeAddress: { type: String, default: "" },
+    placeRating: { type: Number, default: 0 },
+    totalReviews: { type: Number, default: 0 },
 
+    // The actual Google review deep-link
     reviewUrl: { type: String, required: true },
 
-    // Generated QR
-    qrImageUrl: { type: String, default: "" }, // Backblaze B2 CDN URL
-    format: { type: String, enum: ["png", "svg", "pdf"], default: "png" },
+    // Short redirect (for scan tracking)
+    shortCode: { type: String, unique: true, required: true },
 
-    // Branding (paid plans)
-    customColor: { type: String, default: "#000000" },
-    logoUrl: { type: String, default: "" },
+    // QR customisation (plan-gated, validated in controller)
+    qrConfig: { type: qrConfigSchema, default: () => ({}) },
+    standeeConfig: { type: standeeConfigSchema, default: () => ({}) },
+
+    // Watermark flag (free plan)
     hasWatermark: { type: Boolean, default: true },
 
     // Scan tracking
     scanCount: { type: Number, default: 0 },
-    shortCode: { type: String, unique: true, required: true },
 
     status: { type: String, enum: ["active", "archived"], default: "active" },
-
-    // Optional label set by user
-    label: { type: String, default: "" },
   },
   { timestamps: true }
 );
 
+// Unique QR per user+business — enforces plan limits correctly
+qrCodeSchema.index({ owner: 1, placeId: 1 }, { unique: true });
 qrCodeSchema.index({ owner: 1, status: 1 });
+qrCodeSchema.index({ shortCode: 1 });
 
 export default mongoose.model("QRCode", qrCodeSchema);

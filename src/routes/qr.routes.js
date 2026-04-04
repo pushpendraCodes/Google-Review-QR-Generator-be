@@ -9,6 +9,7 @@ const router = Router();
 router.get("/:shortCode", ctrl.scanRedirect);
 
 // QR CRUD — all require JWT
+router.get("/user/check-plan", protect, ctrl.checkUserPlan);
 router.post(
   "/generate",
   protect,

@@ -30,7 +30,7 @@ export const register = async (req, res) => {
     }
 
     const otp = generateOTP();
-    const user = await User.create({
+    await User.create({
       name,
       email,
       password,
@@ -41,9 +41,9 @@ export const register = async (req, res) => {
     });
 
     await sendOtpEmail(email, otp, "verify");
-    res.status(201).json({ message: "Registered. Check your email for the OTP." });
+    res.status(201).json({ success: true, message: "Registered. Check your email for the OTP.", email });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -74,9 +74,9 @@ export const verifyEmail = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
-    res.json({ accessToken, user, firstLogin: user.firstLogin });
+    res.json({ accessToken, user, firstLogin: user.firstLogin, success: true });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -108,9 +108,9 @@ export const login = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
-    res.json({ accessToken, user, firstLogin: user.firstLogin });
+    res.json({ accessToken, success: true, user, firstLogin: user.firstLogin });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -130,13 +130,13 @@ export const googleCallback = async (req, res) => {
 
     // Redirect frontend with access token in query string
     const redirectUrl = new URL(
-      firstLogin ? "/onboarding" : "/dashboard",
+      firstLogin ? "/" : "/",
       process.env.FRONTEND_URL
     );
     redirectUrl.searchParams.set("token", accessToken);
     res.redirect(redirectUrl.toString());
   } catch (err) {
-    res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_failed`);
+    res.redirect(`${process.env.FRONTEND_URL}/auth/login?error=oauth_failed`);
   }
 };
 
@@ -158,7 +158,7 @@ export const refreshAccessToken = async (req, res) => {
     }
 
     // Find user and check stored refresh token matches
-    const user = await User.findById(decoded.id).select("+refreshToken");
+    const user = await User.findById(decoded.id).select("+refreshToken -password");
     if (!user || user.refreshToken !== token)
       return res.status(403).json({ message: "Refresh token revoked or not found." });
 
@@ -176,7 +176,7 @@ export const refreshAccessToken = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    res.json({ accessToken });
+    res.json({ accessToken, user });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -187,8 +187,16 @@ export const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
     const user = await User.findOne({ email: email?.toLowerCase() });
-    if (!user || user.authProvider === "google") {
-      return res.json({ message: "If that email exists, a reset OTP has been sent." });
+    if (!user) {
+      return res.json({ success: false, message: "user not found with this email" });
+    }
+
+    if (user.authProvider == "google") {
+      return res.json({ success: false, message: "This email uses Google login." });
+    }
+
+    if (user.status == "block") {
+      return res.json({ success: false, message: "Account suspended." });
     }
 
     const otp = generateOTP();
@@ -198,9 +206,9 @@ export const forgotPassword = async (req, res) => {
     await user.save();
 
     await sendOtpEmail(email, otp, "reset");
-    res.json({ message: "If that email exists, a reset OTP has been sent." });
+    res.json({ success: true, message: "If that email exists, a reset OTP has been sent." });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -210,15 +218,15 @@ export const verifyOtp = async (req, res) => {
     const { email, otp } = req.body;
     const user = await User.findOne({ email: email?.toLowerCase() });
     if (!user || !user.emailOtp || user.emailOtp !== otp)
-      return res.status(400).json({ message: "Invalid OTP." });
+      return res.status(400).json({ success: false, message: "Invalid OTP." });
     if (new Date() > user.emailOtpExpiry)
-      return res.status(400).json({ message: "OTP expired." });
+      return res.status(400).json({ success: false, message: "OTP expired." });
 
     user.otpVerified = true;
     await user.save();
-    res.json({ message: "OTP verified." });
+    res.json({ success: true, message: "OTP verified." });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -228,7 +236,7 @@ export const resetPassword = async (req, res) => {
     const { email, newPassword } = req.body;
     const user = await User.findOne({ email: email?.toLowerCase() });
     if (!user || !user.otpVerified)
-      return res.status(400).json({ message: "OTP not verified." });
+      return res.status(400).json({ success: false, message: "OTP not verified." });
 
     user.password = newPassword;
     user.emailOtp = null;
@@ -236,9 +244,9 @@ export const resetPassword = async (req, res) => {
     user.otpVerified = false;
     await user.save();
 
-    res.json({ message: "Password reset successfully." });
+    res.json({ success: true, message: "Password reset successfully." });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -264,6 +272,16 @@ export const resendOtp = async (req, res) => {
   }
 };
 
+export const getMe = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select("+password");
+    res.json({ success: true, user });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+
 // ─── Logout ───────────────────────────────────────────────────────────────────
 export const logout = async (req, res) => {
   try {
@@ -284,8 +302,8 @@ export const logout = async (req, res) => {
       sameSite: "strict",
     });
 
-    res.json({ message: "Logged out successfully." });
+    res.json({ success: true, message: "Logged out successfully." });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 };

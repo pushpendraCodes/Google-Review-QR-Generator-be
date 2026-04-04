@@ -14,7 +14,7 @@ router.post("/verify-otp", authLimiter, ctrl.verifyOtp);
 router.post("/reset-password", authLimiter, ctrl.resetPassword);
 router.post("/resend-otp", authLimiter, ctrl.resendOtp);
 router.post("/logout", protect, ctrl.logout);
-
+router.get("/me", protect, ctrl.getMe);
 
 router.post("/refresh-token", ctrl.refreshAccessToken);
 
