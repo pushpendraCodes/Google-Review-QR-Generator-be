@@ -1,7 +1,7 @@
 import { Router } from "express";
 import * as ctrl from "../controllers/users/user.controller.js";
 import { protect } from "../middlewares/auth.middleware.js";
-import { handleImageUpload } from "../middlewares/Upload.middleware.js";
+import { handleImageUpload } from "../middlewares/upload.middleware.js";
 
 
 const router = Router();
