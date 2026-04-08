@@ -39,9 +39,9 @@ export const getProfile = async (req, res) => {
     const result = { user };
     await setCache(cacheKey, result, 300); // 5 min
 
-    res.json(result);
+    res.json({ user, success: true });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: err.message, success: false });
   }
 };
 
