@@ -86,7 +86,7 @@ export const login = async (req, res) => {
     const { email, password } = req.body;
     const user = await User.findOne({ email: email?.toLowerCase() }).select("+password");
     if (!user) return res.status(401).json({ message: "Invalid credentials." });
-    if (user.authProvider === "google")
+    if (user.authProvider === "google" && !user.password)
       return res.status(400).json({ message: "This email uses Google login." });
     if (!user.isEmailVerified)
       return res.status(401).json({ message: "Please verify your email first." });
