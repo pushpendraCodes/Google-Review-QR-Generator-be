@@ -47,10 +47,30 @@ const qrCodeSchema = new mongoose.Schema(
     // Scan tracking
     scanCount: { type: Number, default: 0 },
 
+    // Cache for latest reviews
+    latestReviews: [
+      {
+        authorName: { type: String },
+        rating: { type: Number },
+        text: { type: String },
+        time: { type: Number },
+      }
+    ],
+
     status: { type: String, enum: ["active", "archived"], default: "active" },
+
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
+
+qrCodeSchema.virtual("shortURL").get(function () {
+  const baseUrl = process.env.BACKEND_URL || "http://localhost:5000";
+  return `${baseUrl}/r/${this.shortCode}`;
+});
 
 // Unique QR per user+business — enforces plan limits correctly
 qrCodeSchema.index({ owner: 1, placeId: 1 }, { unique: true });

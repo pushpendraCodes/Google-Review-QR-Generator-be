@@ -56,7 +56,7 @@ async function getPlaceDetails(placeId) {
     params: {
       place_id: placeId,
       key: process.env.GOOGLE_MAPS_API_KEY,
-      fields: "place_id,name,formatted_address,website,formatted_phone_number,rating",
+      fields: "place_id,name,formatted_address,website,formatted_phone_number,rating,user_ratings_total,reviews",
       language: "en",
     },
   });
@@ -73,8 +73,16 @@ async function getPlaceDetails(placeId) {
     website: r.website || "",
     phone: r.formatted_phone_number || "",
     rating: r.rating || null,
+    totalReviews: r.user_ratings_total || 0,
+    reviews: (r.reviews || []).map(rev => ({
+      authorName: rev.author_name,
+      rating: rev.rating,
+      text: rev.text,
+      time: rev.time,
+    })),
   };
 }
+
 
 /**
  * Build the direct Google review URL from a place_id.

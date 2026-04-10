@@ -480,7 +480,7 @@ export const getQRAnalytics = async (req, res) => {
     const days = range === "30d" ? 30 : range === "90d" ? 90 : 7;
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    const [totalScans, dailyData, topHours, cityData] = await Promise.all([
+    const [totalScans, dailyData, trends, deviceData, cityData] = await Promise.all([
       ScanLog.countDocuments({ qrCode: qr._id, scannedAt: { $gte: since } }),
 
       ScanLog.aggregate([
@@ -494,28 +494,52 @@ export const getQRAnalytics = async (req, res) => {
         { $sort: { _id: 1 } },
       ]),
 
+      DailyMetric.find({ qrCode: qr._id, date: { $gte: since } })
+        .sort({ date: 1 })
+        .select("date totalReviewsGrowth avgRatingGrowth"),
+
       ScanLog.aggregate([
         { $match: { qrCode: qr._id, scannedAt: { $gte: since } } },
-        { $group: { _id: { $hour: "$scannedAt" }, count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 5 },
+        {
+          $group: {
+            _id: {
+              $cond: [
+                { $regexMatch: { input: "$userAgent", regex: /mobile/i } }, "Mobile",
+                { $cond: [{ $regexMatch: { input: "$userAgent", regex: /tablet/i } }, "Tablet", "Desktop"] }
+              ]
+            },
+            count: { $sum: 1 }
+          }
+        }
       ]),
 
       ScanLog.aggregate([
         { $match: { qrCode: qr._id, scannedAt: { $gte: since } } },
         { $group: { _id: "$city", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
-        { $limit: 5 },
+        { $limit: 10 },
       ]),
     ]);
 
     const result = {
-      qr: { id: qr._id, businessName: qr.businessName, totalScanCount: qr.scanCount },
+      qr: { 
+        id: qr._id, 
+        businessName: qr.businessName, 
+        totalScanCount: qr.scanCount,
+        rating: qr.placeRating,
+        totalReviews: qr.totalReviews,
+        latestReviews: qr.latestReviews
+      },
       period: { range, days, since },
       totalScans,
       dailyData,
-      topHours,
-      cityData,
+      trends: trends.map(t => ({
+        date: t.date.toISOString().split("T")[0],
+        reviews: t.totalReviewsGrowth,
+        rating: t.avgRatingGrowth
+      })),
+      devices: deviceData.map(d => ({ type: d._id, count: d.count })),
+      cities: cityData.map(c => ({ name: c._id || "Unknown", count: c.count })),
     };
 
     // Cache for 2 minutes
@@ -523,6 +547,8 @@ export const getQRAnalytics = async (req, res) => {
 
     res.json(result);
   } catch (err) {
+    console.error("QR Analytics Error:", err);
     res.status(500).json({ message: err.message });
   }
 };
+
