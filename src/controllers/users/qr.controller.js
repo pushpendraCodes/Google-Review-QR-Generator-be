@@ -97,7 +97,7 @@ export const generateQR = async (req, res) => {
     };
 
     // ── Logo upload (pro+ only) ────────────────────────────────────────────────
-    if (logoData && canUseFeature(plan, "logo")) {
+    if (logoData && typeof logoData === 'string' && logoData.startsWith('data:') && canUseFeature(plan, "logo")) {
       try {
         // Use stable public_id so re-uploads overwrite instead of creating dupes
         const fileName = `logos_${user._id}_${placeId}`;
@@ -107,6 +107,9 @@ export const generateQR = async (req, res) => {
         console.error("Logo upload failed, continuing without logo:", err.message);
         // Non-fatal — proceed without logo
       }
+    } else if (logoData && typeof logoData === 'string' && logoData.startsWith('http')) {
+      // If logoData is already a URL, keep it
+      qrConfig.logoUrl = logoData;
     }
 
     // ── Preserve existing logoUrl if no new logo was uploaded ─────────────────
@@ -260,6 +263,8 @@ export const listQRCodes = async (req, res) => {
 // ─── Get single QR ────────────────────────────────────────────────────────────
 export const getQRCode = async (req, res) => {
   try {
+    console.log(req.user._id, "user")
+    console.log(req.params.id, "qrId")
     const userId = req.user._id.toString();
     const qrId = req.params.id;
     const cacheKey = `qr:detail:${userId}:${qrId}`;
@@ -267,10 +272,11 @@ export const getQRCode = async (req, res) => {
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
+
     const qr = await QRCode.findOne({ _id: qrId, owner: req.user._id });
     if (!qr) return res.status(404).json({ message: "QR code not found." });
 
-    const result = { qr };
+    const result = { success: true, qr };
     await setCache(cacheKey, result, 120); // 2 min
 
     res.json(result);
@@ -522,9 +528,9 @@ export const getQRAnalytics = async (req, res) => {
     ]);
 
     const result = {
-      qr: { 
-        id: qr._id, 
-        businessName: qr.businessName, 
+      qr: {
+        id: qr._id,
+        businessName: qr.businessName,
         totalScanCount: qr.scanCount,
         rating: qr.placeRating,
         totalReviews: qr.totalReviews,

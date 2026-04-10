@@ -1,7 +1,8 @@
 import QRCode from "../../models/QRCode.js";
 import ScanLog from "../../models/ScanLog.js";
 import DailyMetric from "../../models/DailyMetric.js";
-import { getCache, setCache } from "../../utils/cache.js";
+import { getCache, setCache, invalidatePattern } from "../../utils/cache.js";
+import { getPlaceDetails } from "../../services/places.service.js";
 
 // ─── Summary analytics for all user QR codes ─────────────────────────────────
 // GET /api/analytics/summary?range=7d
@@ -100,6 +101,51 @@ export const getSummary = async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("Summary Analytics Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ─── Manually sync latest reviews/ratings from Google ────────────────────────
+// POST /api/analytics/sync
+export const syncUserAnalytics = async (req, res) => {
+  try {
+    const userId = req.user._id.toString();
+    
+    // 1. Get all active QRs for this user
+    const qrCodes = await QRCode.find({ owner: req.user._id, status: "active" });
+    
+    if (qrCodes.length === 0) {
+      return res.json({ success: true, message: "No active QR codes to sync." });
+    }
+
+    // 2. Map through each and fetch fresh details from Google
+    // Using Promise.all for speed, but keep an eye on quota if a user has many QRs
+    const results = await Promise.all(
+      qrCodes.map(async (qr) => {
+        try {
+          const details = await getPlaceDetails(qr.placeId);
+          qr.placeRating = details.rating;
+          qr.totalReviews = details.totalReviews;
+          qr.latestReviews = details.reviews;
+          await qr.save();
+          return { id: qr._id, status: "ok" };
+        } catch (err) {
+          console.error(`Sync failed for QR ${qr._id}:`, err.message);
+          return { id: qr._id, status: "failed", error: err.message };
+        }
+      })
+    );
+
+    // 3. Invalidate summary cache for this user
+    await invalidatePattern(`analytics:*:${userId}:*`);
+
+    res.json({
+      success: true,
+      message: "Sync complete.",
+      results,
+    });
+  } catch (err) {
+    console.error("Sync Analytics Error:", err);
     res.status(500).json({ message: err.message });
   }
 };

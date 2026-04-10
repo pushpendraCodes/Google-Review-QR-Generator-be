@@ -17,12 +17,12 @@ router.post(
   qrGenerateLimiter,
   ctrl.generateQR
 );
-
-router.get("/", protect, ctrl.listQRCodes);
-router.get("/:id", protect, ctrl.getQRCode);
+router.get("/get/:id", protect, ctrl.getQRCode);
 router.put("/:id", protect, ctrl.updateQRCode);
 router.delete("/:id", protect, ctrl.deleteQRCode);
 router.get("/:id/download", protect, ctrl.downloadQRCode);
 router.get("/:id/analytics", protect, planGuard("pro"), ctrl.getQRAnalytics);
+router.get("/", protect, ctrl.listQRCodes);
+
 
 export default router;
