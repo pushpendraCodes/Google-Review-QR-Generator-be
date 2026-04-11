@@ -6,7 +6,7 @@ import { getPlaceDetails } from "../services/places.service.js";
 
 async function snapshotAnalytics() {
   console.log("📈 Starting daily analytics snapshot...");
-  
+
   try {
     const activeQRs = await QRCode.find({ status: "active" });
     const today = new Date();
@@ -19,7 +19,7 @@ async function snapshotAnalytics() {
       try {
         // 1. Fetch latest details from Google
         const details = await getPlaceDetails(qr.placeId);
-        
+
         // 2. Aggregate scans for the previous day
         const scanCount = await ScanLog.countDocuments({
           qrCode: qr._id,
@@ -30,26 +30,26 @@ async function snapshotAnalytics() {
         const stats = await ScanLog.aggregate([
           { $match: { qrCode: qr._id, scannedAt: { $gte: yesterday, $lt: today } } },
           {
-             $facet: {
-               cities: [
-                 { $group: { _id: "$city", count: { $sum: 1 } } },
-                 { $sort: { count: -1 } },
-                 { $limit: 10 }
-               ],
-               devices: [
-                 {
-                   $group: {
-                     _id: {
-                       $cond: [
-                         { $regexMatch: { input: "$userAgent", regex: /mobile/i } }, "mobile",
-                         { $cond: [{ $regexMatch: { input: "$userAgent", regex: /tablet/i } }, "tablet", "desktop"] }
-                       ]
-                     },
-                     count: { $sum: 1 }
-                   }
-                 }
-               ]
-             }
+            $facet: {
+              cities: [
+                { $group: { _id: "$city", count: { $sum: 1 } } },
+                { $sort: { count: -1 } },
+                { $limit: 10 }
+              ],
+              devices: [
+                {
+                  $group: {
+                    _id: {
+                      $cond: [
+                        { $regexMatch: { input: "$userAgent", regex: /mobile/i } }, "mobile",
+                        { $cond: [{ $regexMatch: { input: "$userAgent", regex: /tablet/i } }, "tablet", "desktop"] }
+                      ]
+                    },
+                    count: { $sum: 1 }
+                  }
+                }
+              ]
+            }
           }
         ]);
 
@@ -86,7 +86,7 @@ async function snapshotAnalytics() {
         console.error(`❌ Failed snapshot for QR ${qr._id}:`, err.message);
       }
     }
-    
+
     console.log("📈 Daily analytics snapshot complete.");
   } catch (err) {
     console.error("Critical error in analytics job:", err.message);
@@ -94,11 +94,11 @@ async function snapshotAnalytics() {
 }
 
 function startAnalyticsJob() {
-  // Run every day at Midnight IST
-  cron.schedule("0 0 * * *", snapshotAnalytics, {
+  // TESTING: Run every minute instead of daily at midnight
+  cron.schedule("11 11 * * *", snapshotAnalytics, {
     timezone: "Asia/Kolkata",
   });
-  console.log("📅 Daily analytics snapshot scheduled (00:00 IST)");
+  console.log("📅 Daily analytics snapshot scheduled (11:11 IST)");
 }
 
 export { startAnalyticsJob, snapshotAnalytics };
