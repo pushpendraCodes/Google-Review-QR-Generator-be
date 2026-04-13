@@ -19,7 +19,7 @@ passport.use(
         if (user) {
           // Existing email-signup user tries to log in via Google → link accounts
           if (user.authProvider === "email") {
-            user.authProvider = "google";
+            // user.authProvider = "google";
             user.googleId = profile.id;
             user.isEmailVerified = true;
             user.picture = user.picture || profile.photos?.[0]?.value;

@@ -94,11 +94,11 @@ async function snapshotAnalytics() {
 }
 
 function startAnalyticsJob() {
-  // TESTING: Run every minute instead of daily at midnight
-  cron.schedule("11 11 * * *", snapshotAnalytics, {
+  // Runs daily at midnight (00:00)
+  cron.schedule("0 0 * * *", snapshotAnalytics, {
     timezone: "Asia/Kolkata",
   });
-  console.log("📅 Daily analytics snapshot scheduled (11:11 IST)");
+  console.log("📅 Analytics snapshot scheduled for 00:00 IST daily");
 }
 
 export { startAnalyticsJob, snapshotAnalytics };
