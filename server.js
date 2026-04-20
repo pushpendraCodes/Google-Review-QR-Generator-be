@@ -3,6 +3,7 @@ import app from "./src/app.js";
 import connectDB from "./src/config/db.js";
 import { startWeeklyReportJob } from "./src/jobs/weeklyReport.job.js";
 import { startAnalyticsJob } from "./src/jobs/analytics.job.js";
+import { startInactivityReminderJob } from "./src/jobs/inactivityReminder.job.js";
 
 const PORT = process.env.PORT || 5000;
 
@@ -11,6 +12,7 @@ connectDB().then(() => {
     console.log(`🚀 Server running on port ${PORT} [${process.env.NODE_ENV}]`);
     startWeeklyReportJob();
     startAnalyticsJob();
+    startInactivityReminderJob();
   });
 });
 

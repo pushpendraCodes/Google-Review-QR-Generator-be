@@ -48,7 +48,7 @@ export const getProfile = async (req, res) => {
 // ─── Update profile ───────────────────────────────────────────────────────────
 export const updateProfile = async (req, res) => {
   try {
-    const { name, mobile, businessName, businessType, businessCity } = req.body;
+    const { name, mobile, businessName, businessType, businessCity, emailNotifications, weeklyReportEnabled } = req.body;
 
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found." });
@@ -67,6 +67,8 @@ export const updateProfile = async (req, res) => {
     if (businessName !== undefined) user.businessName = businessName;
     if (businessType !== undefined) user.businessType = businessType;
     if (businessCity !== undefined) user.businessCity = businessCity;
+    if (emailNotifications !== undefined) user.emailNotifications = emailNotifications;
+    if (weeklyReportEnabled !== undefined) user.weeklyReportEnabled = weeklyReportEnabled;
 
     if (user.firstLogin && businessName) user.firstLogin = false;
 

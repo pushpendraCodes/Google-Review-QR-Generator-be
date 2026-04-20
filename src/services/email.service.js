@@ -10,7 +10,7 @@ const transporter = nodemailer.createTransport({
 
 const sendEmail = async ({ to, subject, html }) => {
   const mailOptions = {
-    from: `"${process.env.SMTP_FROM_NAME || "QR Reviews"}" <${process.env.ADMIN_EMAIL}>`,
+    from: `"${process.env.SMTP_FROM_NAME || "ReviewQR"}" <${process.env.ADMIN_EMAIL}>`,
     to,
     subject,
     html,
@@ -18,30 +18,152 @@ const sendEmail = async ({ to, subject, html }) => {
   return transporter.sendMail(mailOptions);
 };
 
+// ─── Base Layout ─────────────────────────────────────────────────────────────
+const baseLayout = ({ title, content, button, footerText }) => `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f4f7f6; }
+    .container { max-width: 600px; margin: 20px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    .header { background: linear-gradient(135deg, #1D9E75 0%, #178a63 100%); color: #ffffff; padding: 40px 20px; text-align: center; }
+    .header h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+    .content { padding: 40px 30px; }
+    .content h2 { color: #1D9E75; margin-top: 0; font-size: 22px; }
+    .content p { margin-bottom: 20px; font-size: 16px; color: #4b5563; }
+    .button-container { text-align: center; margin: 30px 0; }
+    .button { background-color: #1D9E75; color: #ffffff !important; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; display: inline-block; transition: background 0.3s ease; }
+    .footer { background: #f9fbfc; padding: 20px; text-align: center; border-top: 1px solid #edf2f7; }
+    .footer p { font-size: 13px; color: #94a3b8; margin: 5px 0; }
+    .accent { color: #1D9E75; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>ReviewQR</h1>
+    </div>
+    <div class="content">
+      ${title ? `<h2>${title}</h2>` : ""}
+      ${content}
+      ${button
+    ? `
+        <div class="button-container">
+          <a href="${button.link}" class="button">${button.text}</a>
+        </div>
+      `
+    : ""
+  }
+    </div>
+    <div class="footer">
+      <p>&copy; ${new Date().getFullYear()} ReviewQR. All rights reserved.</p>
+      <p>${footerText || "Empowering businesses through smart Google Reviews."}</p>
+      <p>
+        <a href="${process.env.FRONTEND_URL}/dashboard" style="color: #1D9E75; text-decoration: none;">Dashboard</a> | 
+        <a href="${process.env.FRONTEND_URL}/support" style="color: #1D9E75; text-decoration: none;">Support</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+`;
+
 // ─── OTP email ────────────────────────────────────────────────────────────────
 const sendOtpEmail = (to, otp, type = "verify") => {
   const subject =
-    type === "verify" ? "Verify your email — QR Reviews" : "Reset your password — QR Reviews";
+    type === "verify" ? "Verify your email — ReviewQR" : "Reset your password — ReviewQR";
   const title = type === "verify" ? "Verify Your Email" : "Reset Your Password";
   const message =
     type === "verify"
-      ? "Use the OTP below to verify your email address."
-      : "Use the OTP below to reset your password. It expires in 10 minutes.";
+      ? "Welcome to <span class='accent'>ReviewQR</span>! Use the code below to verify your email address and get started."
+      : "We received a request to reset your password. Use the code below to proceed. This code expires in 10 minutes.";
 
-  return sendEmail({
-    to,
-    subject,
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
-        <h2 style="color:#1d4ed8;">${title}</h2>
-        <p style="color:#374151;">${message}</p>
-        <div style="background:#f3f4f6;border-radius:8px;padding:20px;text-align:center;margin:24px 0;">
-          <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#111827;">${otp}</span>
-        </div>
-        <p style="color:#6b7280;font-size:13px;">If you didn't request this, you can safely ignore this email.</p>
+  const html = baseLayout({
+    title,
+    content: `
+      <p>${message}</p>
+      <div style="background:#f3f4f6;border-radius:12px;padding:30px;text-align:center;margin:30px 0;border: 1px dashed #cbd5e1;">
+        <span style="font-size:42px;font-weight:800;letter-spacing:10px;color:#111827;font-family:monospace;">${otp}</span>
       </div>
+      <p style="font-size:14px;color:#6b7280;text-align:center;">If you didn't request this code, you can safely ignore this email.</p>
     `,
   });
+
+  return sendEmail({ to, subject, html });
+};
+
+// ─── Welcome Email ──────────────────────────────────────────────────────────
+const sendWelcomeEmail = (to, userName) => {
+  const html = baseLayout({
+    title: `Welcome to ReviewQR, ${userName}! 🚀`,
+    content: `
+      <p>We're thrilled to have you join us! <span class="accent">ReviewQR</span> is designed to help you get more 5-star Google Reviews with zero friction.</p>
+      <p>Your account is now active. The next step is to create your first dynamic QR code for your business.</p>
+      <div style="background: #f0fdf4; padding: 20px; border-radius: 10px; margin: 20px 0;">
+        <h3 style="margin-top:0; color: #166534; font-size: 18px;">Getting Started:</h3>
+        <ul style="padding-left: 20px; color: #166534;">
+          <li>Search for your business in the dashboard</li>
+          <li>Customize the QR design to match your brand</li>
+          <li>Download and print your custom standee</li>
+        </ul>
+      </div>
+    `,
+    button: {
+      text: "Create My First QR",
+      link: `${process.env.FRONTEND_URL}/generate`,
+    },
+  });
+
+  return sendEmail({ to, subject: "Welcome to ReviewQR — Let's get those reviews! ⭐", html });
+};
+
+// ─── QR Creation Tips ────────────────────────────────────────────────────────
+const sendQrTipsEmail = (to, { userName, businessName }) => {
+  const html = baseLayout({
+    title: "Your QR is Ready! 🎉",
+    content: `
+      <p>Hi ${userName}, you've successfully created a QR code for <span class="accent">${businessName}</span>. Great job!</p>
+      <p>Here are some expert tips to maximize your review collection:</p>
+      <div style="display: flex; flex-direction: column; gap: 15px; margin: 20px 0;">
+        <div style="background: #f8fafc; padding: 15px; border-radius: 8px; border-left: 4px solid #1D9E75;">
+          <strong>📍 Visibility is Key</strong>: Place your QR standee at eye-level near the billing counter or on dining tables.
+        </div>
+        <div style="background: #f8fafc; padding: 15px; border-radius: 8px; border-left: 4px solid #1D9E75;">
+          <strong>🗣️ The Verbal Ask</strong>: Train your staff to say: "If you enjoyed your experience, please scan this to leave us a quick review!"
+        </div>
+        <div style="background: #f8fafc; padding: 15px; border-radius: 8px; border-left: 4px solid #1D9E75;">
+          <strong>✨ Premium Design</strong>: High-quality prints look more professional and trustworthy.
+        </div>
+      </div>
+    `,
+    button: {
+      text: "Download Standee",
+      link: `${process.env.FRONTEND_URL}/dashboard`,
+    },
+  });
+
+  return sendEmail({ to, subject: `Tips for your new QR: ${businessName}`, html });
+};
+
+// ─── Inactivity Reminder ─────────────────────────────────────────────────────
+const sendInactivityReminderEmail = (to, userName) => {
+  const html = baseLayout({
+    title: "Don't miss out on reviews! 📈",
+    content: `
+      <p>Hi ${userName}, we noticed you haven't created your first QR code yet.</p>
+      <p>Businesses using <span class="accent">ReviewQR</span> typically see a <span class="accent">40% increase</span> in review volume within the first month.</p>
+      <p>It only takes 2 minutes to set up. Let's get started today!</p>
+    `,
+    button: {
+      text: "Set Up My QR Now",
+      link: `${process.env.FRONTEND_URL}/qr/generate`,
+    },
+    footerText: "You received this because you recently signed up for ReviewQR.",
+  });
+
+  return sendEmail({ to, subject: "Boost your business rating today! ⭐", html });
 };
 
 // ─── Weekly analytics report ───────────────────────────────────────────────────
@@ -49,27 +171,36 @@ const sendWeeklyReportEmail = (to, { userName, totalScans, topQr, changePercent 
   const arrow = changePercent >= 0 ? "▲" : "▼";
   const color = changePercent >= 0 ? "#16a34a" : "#dc2626";
 
+  const html = baseLayout({
+    title: "Your Weekly QR Report 📊",
+    content: `
+      <p>Hi ${userName}, here is how your QR codes performed this week:</p>
+      <div style="background: #f8fafc; border-radius: 12px; padding: 30px; margin: 20px 0; text-align: center; border: 1px solid #e2e8f0;">
+        <div style="font-size: 14px; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">Total Scans</div>
+        <div style="font-size: 48px; font-weight: 800; color: #1e293b; margin: 10px 0;">${totalScans}</div>
+        <div style="font-size: 16px; font-weight: 600; color: ${color}; bg-color: ${color}10; padding: 4px 12px; border-radius: 20px; display: inline-block;">
+          ${arrow} ${Math.abs(changePercent)}% <span style="font-weight: 400; font-size: 13px; color: #64748b;">vs last week</span>
+        </div>
+      </div>
+      ${topQr
+        ? `
+        <p style="text-align:center; font-size: 15px; color: #475569;">
+          🏆 <strong>Best Performing:</strong> <span class="accent">${topQr.businessName}</span> (${topQr.count} scans)
+        </p>
+      `
+        : ""
+      }
+    `,
+    button: {
+      text: "View Full Analytics",
+      link: `${process.env.FRONTEND_URL}/dashboard`,
+    },
+  });
+
   return sendEmail({
     to,
-    subject: "📊 Your Weekly QR Scan Report",
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
-        <h2 style="color:#1d4ed8;">Weekly Scan Report</h2>
-        <p>Hi ${userName}, here's your scan summary for this week:</p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-          <tr>
-            <td style="padding:12px;background:#f9fafb;border-radius:8px;">
-              <div style="font-size:13px;color:#6b7280;">Total Scans This Week</div>
-              <div style="font-size:28px;font-weight:bold;color:#111827;">${totalScans}</div>
-              <div style="font-size:13px;color:${color};">${arrow} ${Math.abs(changePercent)}% vs last week</div>
-            </td>
-          </tr>
-        </table>
-        ${topQr ? `<p style="color:#374151;">🏆 <strong>Top QR:</strong> ${topQr.businessName} (${topQr.count} scans)</p>` : ""}
-        <a href="${process.env.FRONTEND_URL}/dashboard" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#1d4ed8;color:white;text-decoration:none;border-radius:6px;">View Full Dashboard</a>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">You're receiving this because you're on a Pro or Agency plan.</p>
-      </div>
-    `,
+    subject: `📊 Weekly Report: ${totalScans} scans this week`,
+    html,
   });
 };
 
@@ -322,6 +453,14 @@ const sendEnquiryEmail = ({ name, email, phone, message }) => {
 // };
 
 
-export { sendEmail, sendOtpEmail, sendWeeklyReportEmail, sendEnquiryEmail };
+export {
+  sendEmail,
+  sendOtpEmail,
+  sendWeeklyReportEmail,
+  sendEnquiryEmail,
+  sendWelcomeEmail,
+  sendQrTipsEmail,
+  sendInactivityReminderEmail,
+};
 
 

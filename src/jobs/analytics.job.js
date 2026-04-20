@@ -95,7 +95,7 @@ async function snapshotAnalytics() {
 
 function startAnalyticsJob() {
   // Runs daily at midnight (00:00)
-  cron.schedule("0 0 * * *", snapshotAnalytics, {
+  cron.schedule("51 14 * * *", snapshotAnalytics, {
     timezone: "Asia/Kolkata",
   });
   console.log("📅 Analytics snapshot scheduled for 00:00 IST daily");

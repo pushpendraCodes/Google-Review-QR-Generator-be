@@ -9,6 +9,7 @@ import { getCache, setCache, delCache, invalidatePattern } from "../../utils/cac
 import axios from "axios";
 import { deleteFromCloudinary, uploadToCloudinary } from "../../services/cloudinary.service.js";
 import QRDownload from "../../models/QRDownload.js";
+import { sendQrTipsEmail } from "../../services/email.service.js";
 
 // ─── Generate QR ──────────────────────────────────────────────────────────────
 // POST /api/qr/generate
@@ -172,6 +173,14 @@ export const generateQR = async (req, res) => {
       isNew: !existing,
       qr,
     });
+
+    // Send usage tips email if it's a new QR (fire-and-forget)
+    if (!existing && user.emailNotifications !== false) {
+      sendQrTipsEmail(user.email, {
+        userName: user.name,
+        businessName: qr.businessName,
+      }).catch((err) => console.error("Tips email failed:", err.message));
+    }
 
   } catch (err) {
     // Duplicate key on shortCode is extremely rare but handle it

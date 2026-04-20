@@ -12,6 +12,7 @@ async function sendWeeklyReports() {
     const users = await User.find({
       plan: { $in: ["pro", "agency"] },
       planExpiresAt: { $gt: new Date() },
+      weeklyReportEnabled: { $ne: false },
       status: "active",
     }).select("_id name email");
 

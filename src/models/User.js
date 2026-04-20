@@ -38,6 +38,9 @@ const userSchema = new mongoose.Schema(
 
     status: { type: String, enum: ["active", "block"], default: "active" },
     lastLoginAt: { type: Date, default: null },
+    inactivityReminderSent: { type: Boolean, default: false },
+    emailNotifications: { type: Boolean, default: true },
+    weeklyReportEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

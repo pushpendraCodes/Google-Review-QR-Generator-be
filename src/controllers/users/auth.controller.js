@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import User from "../../models/User.js";
-import { sendOtpEmail } from "../../services/email.service.js";
+import { sendOtpEmail, sendWelcomeEmail } from "../../services/email.service.js";
 import { generateOTP, signAccessToken, signRefreshToken } from "../../utils/helpers.js";
 
 // ─── Helper: issue both tokens + persist refresh token ───────────────────────
@@ -75,6 +75,11 @@ export const verifyEmail = async (req, res) => {
     });
 
     res.json({ accessToken, user, firstLogin: user.firstLogin, success: true });
+
+    // Send welcome email (fire-and-forget)
+    sendWelcomeEmail(user.email, user.name).catch((err) =>
+      console.error("Welcome email failed:", err.message)
+    );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -135,6 +140,13 @@ export const googleCallback = async (req, res) => {
     );
     redirectUrl.searchParams.set("token", accessToken);
     res.redirect(redirectUrl.toString());
+
+    // Send welcome email if first login
+    if (firstLogin) {
+      sendWelcomeEmail(req.user.email, req.user.name).catch((err) =>
+        console.error("Welcome email failed:", err.message)
+      );
+    }
   } catch (err) {
     res.redirect(`${process.env.FRONTEND_URL}/auth/login?error=oauth_failed`);
   }
@@ -154,11 +166,13 @@ export const refreshAccessToken = async (req, res) => {
     try {
       decoded = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
     } catch (err) {
+      console.log(err);
       return res.status(403).json({ message: "Invalid or expired refresh token." });
     }
-
+    console.log(decoded, "decoded")
     // Find user and check stored refresh token matches
     const user = await User.findById(decoded.id).select("+refreshToken -password");
+    console.log(user, token, "user")
     if (!user || user.refreshToken !== token)
       return res.status(403).json({ message: "Refresh token revoked or not found." });
 
