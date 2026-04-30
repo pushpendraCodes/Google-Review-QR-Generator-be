@@ -1,6 +1,6 @@
 import QRCode from "../../models/QRCode.js";
 import ScanLog from "../../models/ScanLog.js";
-// import User from "../../models/User.js";
+import User from "../../models/User.js";
 import { generateQRPng, generateQRSvg, generateQRPdf } from "../../services/qr.service.js";
 import { uploadToB2 } from "../../services/b2.service.js";
 import { buildReviewUrl } from "../../services/places.service.js";
@@ -10,6 +10,7 @@ import axios from "axios";
 import { deleteFromCloudinary, uploadToCloudinary } from "../../services/cloudinary.service.js";
 import QRDownload from "../../models/QRDownload.js";
 import { sendQrTipsEmail } from "../../services/email.service.js";
+import { generateReviewSuggestions } from "../../services/ai.service.js";
 
 // ─── Generate QR ──────────────────────────────────────────────────────────────
 // POST /api/qr/generate
@@ -428,7 +429,7 @@ export const downloadQRCode = async (req, res) => {
 };
 
 // ─── Scan redirect ────────────────────────────────────────────────────────────
-// GET /r/:shortCode  — no auth, logs scan and 302 → Google review URL
+// GET /r/:shortCode  — no auth, logs scan and 302 → Google review URL or landing page
 export const scanRedirect = async (req, res) => {
   try {
     const shortCode = req.params.shortCode;
@@ -470,10 +471,109 @@ export const scanRedirect = async (req, res) => {
 
     await ScanLog.create({ qrCode: qr._id, userAgent, ip: hashedIp, city, country });
 
+    // ── Smart redirect: active paid plan → landing page, else → Google Review ──
+    const owner = await User.findById(qr.owner).select("plan planExpiresAt").lean();
+    const hasActivePaidPlan =
+      owner &&
+      owner.plan !== "free" &&
+      owner.planExpiresAt &&
+      new Date(owner.planExpiresAt) > new Date();
+
+    if (hasActivePaidPlan) {
+      // Redirect to branded landing page with AI review suggestions
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+      return res.redirect(302, `${frontendUrl}/review/${shortCode}`);
+    }
+
+    // Free or expired plan → direct Google review redirect
     res.redirect(302, qr.reviewUrl);
   } catch (err) {
     console.error("Scan redirect error:", err.message);
     res.redirect(302, "https://google.com");
+  }
+};
+
+// ─── Landing page data (public, no auth) ──────────────────────────────────────
+// GET /api/qr/landing/:shortCode
+export const getLandingData = async (req, res) => {
+  try {
+    const { shortCode } = req.params;
+
+    const cacheKey = `qr:landing:${shortCode}`;
+    const cached = await getCache(cacheKey);
+    if (cached) return res.json(cached);
+
+    const qr = await QRCode.findOne({ shortCode, status: "active" }).lean();
+    if (!qr) return res.status(404).json({ message: "QR code not found." });
+
+    const owner = await User.findById(qr.owner)
+      .select("plan planExpiresAt businessName businessType")
+      .lean();
+
+    const hasActivePaidPlan =
+      owner &&
+      owner.plan !== "free" &&
+      owner.planExpiresAt &&
+      new Date(owner.planExpiresAt) > new Date();
+
+    const result = {
+      success: true,
+      businessName: qr.businessName,
+      logoUrl: qr.qrConfig?.logoUrl || "",
+      placeRating: qr.placeRating,
+      totalReviews: qr.totalReviews,
+      reviewUrl: qr.reviewUrl,
+      placeAddress: qr.placeAddress,
+      aiEnabled: hasActivePaidPlan,
+    };
+
+    // Cache for 5 minutes
+    await setCache(cacheKey, result, 300);
+
+    res.json(result);
+  } catch (err) {
+    console.error("Landing data error:", err.message);
+    res.status(500).json({ message: "Failed to load landing data." });
+  }
+};
+
+// ─── AI review generation (public, rate-limited) ──────────────────────────────
+// POST /api/qr/ai-reviews  body: { shortCode }
+export const generateAIReviews = async (req, res) => {
+  try {
+    const { shortCode } = req.body;
+    if (!shortCode) return res.status(400).json({ message: "shortCode is required." });
+
+    const qr = await QRCode.findOne({ shortCode, status: "active" }).lean();
+    if (!qr) return res.status(404).json({ message: "QR code not found." });
+
+    // Verify QR owner has active paid plan
+    const owner = await User.findById(qr.owner)
+      .select("plan planExpiresAt businessType")
+      .lean();
+
+    const hasActivePaidPlan =
+      owner &&
+      owner.plan !== "free" &&
+      owner.planExpiresAt &&
+      new Date(owner.planExpiresAt) > new Date();
+
+    if (!hasActivePaidPlan) {
+      return res.status(403).json({
+        message: "AI review suggestions are not available for this business.",
+      });
+    }
+
+    const reviews = await generateReviewSuggestions({
+      businessName: qr.businessName,
+      businessType: owner.businessType || "",
+      rating: qr.placeRating,
+    });
+
+    res.json({ success: true, reviews });
+  } catch (err) {
+    console.error("AI review generation error:", err.message);
+    res.status(500).json({ message: "Failed to generate review suggestions." });
   }
 };
 

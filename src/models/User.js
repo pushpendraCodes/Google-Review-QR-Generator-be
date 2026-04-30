@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema(
     inactivityReminderSent: { type: Boolean, default: false },
     emailNotifications: { type: Boolean, default: true },
     weeklyReportEnabled: { type: Boolean, default: true },
+
+    // Plan expiry notification tracking
+    planExpiryWarningSent: { type: Boolean, default: false },
+    planExpiredNotifSent: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

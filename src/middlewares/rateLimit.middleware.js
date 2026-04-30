@@ -26,4 +26,12 @@ const paymentLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-export { authLimiter, qrGenerateLimiter, paymentLimiter };
+const aiReviewLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 min
+  max: 10,
+  message: { message: "Too many review generation requests. Please try again shortly." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+export { authLimiter, qrGenerateLimiter, paymentLimiter, aiReviewLimiter };

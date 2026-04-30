@@ -4,6 +4,7 @@ import connectDB from "./src/config/db.js";
 import { startWeeklyReportJob } from "./src/jobs/weeklyReport.job.js";
 import { startAnalyticsJob } from "./src/jobs/analytics.job.js";
 import { startInactivityReminderJob } from "./src/jobs/inactivityReminder.job.js";
+import { startPlanExpiryJob } from "./src/jobs/planExpiry.job.js";
 
 const PORT = process.env.PORT || 5000;
 
@@ -13,6 +14,6 @@ connectDB().then(() => {
     startWeeklyReportJob();
     startAnalyticsJob();
     startInactivityReminderJob();
+    startPlanExpiryJob();
   });
 });
-

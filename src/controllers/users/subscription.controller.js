@@ -133,6 +133,8 @@ export const verifyPayment = async (req, res) => {
         await User.findByIdAndUpdate(tx.user, {
             plan: tx.plan,
             planExpiresAt: getPlanExpiry(tx.billingCycle),
+            planExpiryWarningSent: false,
+            planExpiredNotifSent: false,
         });
 
         // Invalidate subscription & profile caches
@@ -183,6 +185,8 @@ export const webhook = async (req, res) => {
                 await User.findByIdAndUpdate(tx.user, {
                     plan: tx.plan,
                     planExpiresAt: getPlanExpiry(tx.billingCycle),
+                    planExpiryWarningSent: false,
+                    planExpiredNotifSent: false,
                 });
                 // Invalidate caches
                 const userId = tx.user.toString();
