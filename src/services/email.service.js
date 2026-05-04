@@ -208,15 +208,15 @@ const sendEnquiryEmail = ({ name, email, phone, message }) => {
   const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
   return sendEmail({
-    to: process.env.ADMIN_EMAIL,          // e.g. admin@reviewqr.in
-    subject: `📩 New Enquiry from ${name} — ReviewQR.in`,
+    to: process.env.ADMIN_EMAIL,          // e.g. admin@getreviewqr.com
+    subject: `📩 New Enquiry from ${name} — getreviewqr.com`,
     html: `
       <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:0;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
 
         <!-- Header -->
         <div style="background:#1D9E75;padding:24px 28px;">
           <h2 style="margin:0;color:#ffffff;font-size:20px;">📩 New Enquiry Received</h2>
-          <p style="margin:4px 0 0;color:#d1fae5;font-size:13px;">via ReviewQR.in Contact Form</p>
+          <p style="margin:4px 0 0;color:#d1fae5;font-size:13px;">via getreviewqr.com Contact Form</p>
         </div>
 
         <!-- Body -->
@@ -270,7 +270,7 @@ const sendEnquiryEmail = ({ name, email, phone, message }) => {
           </div>
 
           <!-- Quick reply button -->
-          <a href="mailto:${email}?subject=Re: Your enquiry on ReviewQR.in"
+          <a href="mailto:${email}?subject=Re: Your enquiry on getreviewqr.com"
             style="display:inline-block;padding:12px 24px;background:#1D9E75;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">
             ↩ Reply to ${name}
           </a>
@@ -279,7 +279,7 @@ const sendEnquiryEmail = ({ name, email, phone, message }) => {
         <!-- Footer -->
         <div style="padding:16px 28px;background:#f9fafb;border-top:1px solid #e5e7eb;">
           <p style="margin:0;font-size:12px;color:#9ca3af;">
-            This email was sent automatically from the ReviewQR.in contact form.
+            This email was sent automatically from the getreviewqr.com contact form.
           </p>
         </div>
       </div>
