@@ -112,9 +112,9 @@ export const verifyPayment = async (req, res) => {
             return res.status(400).json({ message: "Payment signature verification failed." });
         }
 
-        // ── Atomic update: pending → completed ────────────────────────────────────
+        // ── Atomic update: pending/failed → completed ────────────────────────────────────
         const tx = await Transaction.findOneAndUpdate(
-            { razorpayOrderId, status: "pending" },
+            { razorpayOrderId, status: { $in: ["pending", "failed"] } },
             {
                 status: "completed",
                 transactionId: razorpayPaymentId,
@@ -125,8 +125,11 @@ export const verifyPayment = async (req, res) => {
         );
 
         if (!tx) {
-            // Payment may have been verified already via webhook — return success
-            return res.json({ message: "Payment already verified.", success: true });
+            const existingTx = await Transaction.findOne({ razorpayOrderId });
+            if (existingTx && existingTx.status === "completed") {
+                return res.json({ message: "Payment already verified.", success: true });
+            }
+            return res.status(400).json({ message: "Transaction not found or already processed.", success: false });
         }
 
         // ── Activate plan on user ──────────────────────────────────────────────────
