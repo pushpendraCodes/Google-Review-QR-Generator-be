@@ -174,7 +174,7 @@ export const webhook = async (req, res) => {
 
         if (event.event === "payment.captured" && payment) {
             const tx = await Transaction.findOneAndUpdate(
-                { razorpayOrderId: payment.order_id, status: "pending" },
+                { razorpayOrderId: payment.order_id, status: { $in: ["pending", "failed"] } },
                 {
                     status: "completed",
                     transactionId: payment.id,
