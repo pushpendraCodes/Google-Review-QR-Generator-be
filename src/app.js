@@ -11,6 +11,11 @@ import subscriptionRoutes from "./routes/subscription.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
 import placesRoutes from "./routes/places.routes.js";
 import contactRoutes from "./routes/contactRoute.js";
+import adminAuthRoutes from "./routes/admin/auth.routes.js";
+import adminDashboardRoutes from "./routes/admin/dashboard.routes.js";
+import adminUsersRoutes from "./routes/admin/users.routes.js";
+import adminRevenueRoutes from "./routes/admin/revenue.routes.js";
+import adminQRCodesRoutes from "./routes/admin/qrCodes.routes.js";
 
 const app = express();
 
@@ -43,6 +48,17 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/places", placesRoutes);         // business search
 app.use("/r", qrRoutes);                      // scan redirect /r/:shortCode
 app.use("/api/contact", contactRoutes);
+
+
+// admin routes
+app.use("/api/admin/auth", adminAuthRoutes);
+app.use("/api/admin/dashboard", adminDashboardRoutes);
+app.use("/api/admin/users", adminUsersRoutes);
+app.use("/api/admin/revenue", adminRevenueRoutes);
+app.use("/api/admin/qrCodes", adminQRCodesRoutes);
+
+
+
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
