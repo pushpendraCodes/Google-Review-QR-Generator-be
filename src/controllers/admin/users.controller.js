@@ -13,7 +13,6 @@ export const listUsers = async (req, res) => {
 
     const filter = {};
 
-    // Text search on name, email, businessName
     if (req.query.search) {
       const re = new RegExp(req.query.search.trim(), "i");
       filter.$or = [{ name: re }, { email: re }, { businessName: re }];
@@ -27,7 +26,9 @@ export const listUsers = async (req, res) => {
       filter.status = req.query.status;
     }
 
-    const [users, total] = await Promise.all([
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const [users, total, statsAgg] = await Promise.all([
       User.find(filter)
         .select("-password -refreshToken -emailOtp -emailOtpExpiry")
         .sort({ createdAt: -1 })
@@ -35,7 +36,50 @@ export const listUsers = async (req, res) => {
         .limit(limit)
         .lean(),
       User.countDocuments(filter),
+
+      // Stats always run on ALL users, ignoring filters
+      User.aggregate([
+        {
+          $facet: {
+            totalAll: [{ $count: "count" }],
+            activeAll: [{ $match: { status: "active" } }, { $count: "count" }],
+            blockedAll: [{ $match: { status: "block" } }, { $count: "count" }],
+            byPlan: [{ $group: { _id: "$plan", count: { $sum: 1 } } }],
+            newThisMonth: [
+              { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+              { $count: "count" }
+            ],
+            // Churned = had a paid plan, now expired and not renewed
+            churned: [
+              {
+                $match: {
+                  plan: "free",
+                  planExpiresAt: { $lt: new Date(), $ne: null }
+                }
+              },
+              { $count: "count" }
+            ],
+          }
+        }
+      ])
     ]);
+
+    // Parse aggregation results
+    const s = statsAgg[0];
+    const totalAll = s.totalAll[0]?.count || 0;
+    const activeAll = s.activeAll[0]?.count || 0;
+    const blockedAll = s.blockedAll[0]?.count || 0;
+    const newThisMonth = s.newThisMonth[0]?.count || 0;
+    const churned = s.churned[0]?.count || 0;
+
+    // Churn rate = churned / total (avoid divide by zero)
+    const churnRate = totalAll > 0
+      ? ((churned / totalAll) * 100).toFixed(1) + "%"
+      : "0%";
+
+    // Build plan breakdown as object { free: 10, starter: 3, ... }
+    const byPlan = { free: 0, starter: 0, pro: 0, agency: 0 };
+    s.byPlan.forEach(({ _id, count }) => { if (_id) byPlan[_id] = count; });
 
     return res.json({
       users,
@@ -45,7 +89,17 @@ export const listUsers = async (req, res) => {
         limit,
         totalPages: Math.ceil(total / limit),
       },
+      stats: {
+        total: totalAll,
+        active: activeAll,
+        blocked: blockedAll,
+        newThisMonth,
+        churned,
+        churnRate,
+        byPlan,            // { free, starter, pro, agency }
+      }
     });
+
   } catch (err) {
     console.error("Admin listUsers error:", err);
     return res.status(500).json({ message: "Internal server error" });
