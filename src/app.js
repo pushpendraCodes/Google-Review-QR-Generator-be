@@ -15,7 +15,7 @@ import adminAuthRoutes from "./routes/admin/auth.routes.js";
 import adminDashboardRoutes from "./routes/admin/dashboard.routes.js";
 import adminUsersRoutes from "./routes/admin/users.routes.js";
 import adminRevenueRoutes from "./routes/admin/revenue.routes.js";
-import adminQRCodesRoutes from "./routes/admin/qrCodes.routes.js";
+import adminQRCodesRoutes from "./routes/admin/qrcodes.routes.js";
 
 const app = express();
 
