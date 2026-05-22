@@ -11,6 +11,7 @@ import subscriptionRoutes from "./routes/subscription.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
 import placesRoutes from "./routes/places.routes.js";
 import contactRoutes from "./routes/contactRoute.js";
+import platformReviewRoutes from "./routes/platformReview.routes.js";
 import adminAuthRoutes from "./routes/admin/auth.routes.js";
 import adminDashboardRoutes from "./routes/admin/dashboard.routes.js";
 import adminUsersRoutes from "./routes/admin/users.routes.js";
@@ -48,6 +49,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/places", placesRoutes);         // business search
 app.use("/r", qrRoutes);                      // scan redirect /r/:shortCode
 app.use("/api/contact", contactRoutes);
+app.use("/api/reviews", platformReviewRoutes);
 
 
 // admin routes
