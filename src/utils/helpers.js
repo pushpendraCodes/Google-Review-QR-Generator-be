@@ -35,11 +35,43 @@ const getPlanExpiry = (billingCycle) => {
   return now;
 };
 
-// Plan prices in paise (Razorpay uses smallest currency unit)
+// Plan prices in paise (Razorpay — India, smallest currency unit)
 const PLAN_PRICES = {
   starter: { monthly: 29900, annual: 251300 },
   pro: { monthly: 69900, annual: 587300 },
   agency: { monthly: 149900, annual: 1259300 },
+};
+
+// Fixed USD prices in cents (Lemon Squeezy — international; must match variant prices in LS dashboard)
+const PLAN_PRICES_USD = {
+  starter: { monthly: 900, annual: 7500 },
+  pro: { monthly: 1900, annual: 15900 },
+  agency: { monthly: 3900, annual: 32700 },
+};
+
+/** Country code from CDN / hosting headers (Vercel, Cloudflare). */
+const getCountryFromRequest = (req) => {
+  const raw =
+    req.headers["cf-ipcountry"] ||
+    req.headers["x-vercel-ip-country"] ||
+    req.headers["x-country-code"] ||
+    "";
+  return String(raw).toUpperCase() || null;
+};
+
+/** India → Razorpay (INR); everyone else → Lemon Squeezy (USD). */
+const getPaymentRegion = (req) => {
+  const country = getCountryFromRequest(req);
+  if (country === "IN") return { region: "india", currency: "INR", country };
+  return { region: "international", currency: "USD", country: country || "unknown" };
+};
+
+/** Explicit currency from client overrides geo; otherwise fall back to IP region. */
+const resolveCheckoutCurrency = (req, requestedCurrency) => {
+  if (requestedCurrency === "INR" || requestedCurrency === "USD") {
+    return requestedCurrency;
+  }
+  return getPaymentRegion(req).currency;
 };
 
 // QR limits per plan
@@ -71,6 +103,10 @@ export {
   signRefreshToken,
   getPlanExpiry,
   PLAN_PRICES,
+  PLAN_PRICES_USD,
+  getCountryFromRequest,
+  getPaymentRegion,
+  resolveCheckoutCurrency,
   QR_LIMITS,
   dataURLtoBuffer,
   canUseFeature

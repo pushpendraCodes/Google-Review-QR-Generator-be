@@ -10,7 +10,16 @@ const transactionSchema = new mongoose.Schema(
     couponApplied: { type: String, default: "" },
     billingCycle: { type: String, enum: ["monthly", "annual"], required: true },
 
-    razorpayOrderId: { type: String, required: true, unique: true },
+    paymentProvider: {
+      type: String,
+      enum: ["razorpay", "lemon_squeezy"],
+      default: "razorpay",
+    },
+    currency: { type: String, enum: ["INR", "USD"], default: "INR" },
+
+    razorpayOrderId: { type: String, sparse: true, unique: true },
+    lemonSqueezyCheckoutId: { type: String, sparse: true, unique: true },
+    lemonCheckoutUrl: { type: String, default: "" },
     transactionId: { type: String, sparse: true, unique: true },
     razorpaySignature: { type: String, default: "" },
 

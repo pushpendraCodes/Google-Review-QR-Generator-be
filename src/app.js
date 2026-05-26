@@ -23,14 +23,15 @@ const app = express();
 // ─── CORS ────────────────────────────────────────────────────────────────────
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://google-review-qr-generator-fe-nine.vercel.app", "https://getreviewqr.com", "https://admin.getreviewqr.com", "https://www.getreviewqr.com"],
+    origin: ["http://localhost:3000", "http://localhost:5173", "https://google-review-qr-generator-fe-nine.vercel.app", "https://getreviewqr.com", "https://admin.getreviewqr.com", "https://www.getreviewqr.com"],
     credentials: true,
   })
 );
 
 // ─── Body parsers ─────────────────────────────────────────────────────────────
-// Raw body needed for Razorpay webhook signature verification
+// Raw body needed for payment webhook signature verification
 app.use("/api/subscription/webhook", express.raw({ type: "application/json" }));
+app.use("/api/subscription/lemon-webhook", express.raw({ type: "application/json" }));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
