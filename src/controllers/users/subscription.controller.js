@@ -239,6 +239,10 @@ export const createLemonCheckoutHandler = async (req, res) => {
             billingCycle,
             paymentProvider: "lemon_squeezy",
             currency: "USD",
+            // Workaround: your current Mongo unique index on `razorpayOrderId`
+            // treats missing as `null`, causing duplicate-key errors for non-Razorpay txns.
+            // We set a unique placeholder so Lemon transactions won't collide.
+            razorpayOrderId: `lemon_${checkoutId}`,
             lemonSqueezyCheckoutId: String(checkoutId),
             lemonCheckoutUrl: checkoutUrl,
             idempotencyKey,
@@ -451,6 +455,7 @@ export const lemonWebhook = async (req, res) => {
                         billingCycle,
                         paymentProvider: "lemon_squeezy",
                         currency: "USD",
+                        razorpayOrderId: `lemon_${orderId}`,
                         lemonSqueezyCheckoutId: `order_${orderId}`,
                         transactionId: String(orderId),
                         status: "completed",
