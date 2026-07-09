@@ -23,7 +23,7 @@ const app = express();
 // ─── CORS ────────────────────────────────────────────────────────────────────
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:5173", "https://google-review-qr-generator-fe-nine.vercel.app", "https://getreviewqr.com", "https://admin.getreviewqr.com", "https://www.getreviewqr.com"],
+    origin: ["http://localhost:3000","http://localhost:5173", "https://admin.getreviewqr.com", "https://www.getreviewqr.com",],
     credentials: true,
   })
 );

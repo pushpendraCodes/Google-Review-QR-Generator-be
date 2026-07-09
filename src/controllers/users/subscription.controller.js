@@ -12,7 +12,10 @@ import {
 import { getCache, setCache, delCache } from "../../utils/cache.js";
 import {
     createLemonCheckout,
+    getLemonOrder,
+    findLemonOrdersByEmail,
     getLemonVariantId,
+    getPlanFromVariantId,
     isLemonSqueezyConfigured,
 } from "../../services/lemonSqueezy.service.js";
 
@@ -56,6 +59,76 @@ const assertNoDuplicateActivePlan = (user, plan) => {
         return "You already have an active subscription for this plan.";
     }
     return null;
+};
+
+/**
+ * Mark Lemon order paid and activate the user plan.
+ * Used by both the webhook and the client-side verify-on-return path
+ * (webhooks cannot reach localhost in development).
+ */
+const completeLemonOrder = async ({
+    userId,
+    plan,
+    billingCycle,
+    orderId,
+    checkoutId,
+    webhookVerified = false,
+}) => {
+    const orderIdStr = String(orderId);
+
+    const alreadyDone = await Transaction.findOne({
+        transactionId: orderIdStr,
+        status: "completed",
+    });
+    if (alreadyDone) {
+        // Idempotent: ensure user plan is active even if a prior step only marked the tx.
+        await activateUserPlan(alreadyDone);
+        return { tx: alreadyDone, activated: true, alreadyCompleted: true };
+    }
+
+    const pendingFilter = {
+        user: userId,
+        plan,
+        billingCycle,
+        paymentProvider: "lemon_squeezy",
+        status: { $in: ["pending", "failed"] },
+    };
+    if (checkoutId) {
+        pendingFilter.lemonSqueezyCheckoutId = String(checkoutId);
+    }
+
+    let tx = await Transaction.findOne(pendingFilter).sort({ createdAt: -1 });
+
+    if (tx) {
+        tx.status = "completed";
+        tx.transactionId = orderIdStr;
+        tx.purchaseDate = new Date();
+        tx.webhookVerified = webhookVerified;
+        await tx.save();
+        await activateUserPlan(tx);
+        return { tx, activated: true, alreadyCompleted: false };
+    }
+
+    const amount = PLAN_PRICES_USD[plan]?.[billingCycle] ?? 0;
+    tx = await Transaction.create({
+        user: userId,
+        plan,
+        amount,
+        originalAmount: amount,
+        billingCycle,
+        paymentProvider: "lemon_squeezy",
+        currency: "USD",
+        razorpayOrderId: `lemon_${orderIdStr}`,
+        lemonSqueezyCheckoutId: checkoutId
+            ? String(checkoutId)
+            : `order_${orderIdStr}`,
+        transactionId: orderIdStr,
+        status: "completed",
+        purchaseDate: new Date(),
+        webhookVerified,
+    });
+    await activateUserPlan(tx);
+    return { tx, activated: true, alreadyCompleted: false };
 };
 
 // ─── Pricing region (India vs international) ─────────────────────────────────
@@ -369,6 +442,112 @@ export const webhook = async (req, res) => {
     }
 };
 
+// ─── Verify Lemon Squeezy payment (client redirect fallback) ─────────────────
+// POST /api/subscription/verify-lemon-payment
+// Razorpay verifies client-side; Lemon normally uses webhooks. Localhost cannot
+// receive Lemon webhooks, so after redirect we fetch the order from Lemon's API
+// and activate the plan the same way.
+export const verifyLemonPayment = async (req, res) => {
+    try {
+        let { orderId } = req.body;
+
+        if (!isLemonSqueezyConfigured()) {
+            return res.status(503).json({
+                message: "Lemon Squeezy is not configured.",
+                success: false,
+            });
+        }
+
+        const pendingTx = await Transaction.findOne({
+            user: req.user._id,
+            paymentProvider: "lemon_squeezy",
+            status: { $in: ["pending", "failed"] },
+        }).sort({ createdAt: -1 });
+
+        let order = null;
+
+        if (orderId) {
+            order = await getLemonOrder(orderId);
+        } else {
+            // Redirect sometimes omits order_id — match latest paid order for this email
+            // created after our pending checkout.
+            const orders = await findLemonOrdersByEmail(req.user.email);
+            const pendingCreatedAt = pendingTx
+                ? new Date(pendingTx.createdAt).getTime()
+                : Date.now() - 60 * 60 * 1000;
+
+            order =
+                orders.find((o) => {
+                    const status = String(o.attributes?.status || "").toLowerCase();
+                    const created = new Date(o.attributes?.created_at || 0).getTime();
+                    return status === "paid" && created >= pendingCreatedAt - 60_000;
+                }) || null;
+
+            if (order) orderId = order.id;
+        }
+
+        if (!order) {
+            return res.status(404).json({
+                message: "Paid Lemon Squeezy order not found yet. Please wait a moment and refresh.",
+                success: false,
+            });
+        }
+
+        const status = String(order.attributes?.status || "").toLowerCase();
+        if (status !== "paid") {
+            return res.status(400).json({
+                message: `Order is not paid yet (status: ${status || "unknown"}).`,
+                success: false,
+            });
+        }
+
+        const userEmail = String(order.attributes?.user_email || "").toLowerCase();
+        const authEmail = String(req.user.email || "").toLowerCase();
+        if (userEmail && authEmail && userEmail !== authEmail) {
+            return res.status(403).json({
+                message: "This order does not belong to your account.",
+                success: false,
+            });
+        }
+
+        const variantId = order.attributes?.first_order_item?.variant_id;
+        const mapped = variantId ? getPlanFromVariantId(variantId) : null;
+
+        const plan = mapped?.plan || pendingTx?.plan;
+        const billingCycle = mapped?.billingCycle || pendingTx?.billingCycle || "monthly";
+
+        if (!plan || !VALID_PLANS.includes(plan)) {
+            return res.status(400).json({
+                message: "Could not determine plan from Lemon order.",
+                success: false,
+            });
+        }
+
+        const { tx, alreadyCompleted } = await completeLemonOrder({
+            userId: req.user._id,
+            plan,
+            billingCycle,
+            orderId: order.id,
+            checkoutId: pendingTx?.lemonSqueezyCheckoutId,
+            webhookVerified: false,
+        });
+
+        res.json({
+            message: alreadyCompleted
+                ? "Payment already verified. Plan is active."
+                : "Payment verified. Plan activated!",
+            success: true,
+            transaction: tx,
+        });
+    } catch (err) {
+        console.error("Verify Lemon payment error:", err?.response?.data || err);
+        res.status(500).json({
+            message: err?.response?.data?.errors?.[0]?.detail || err.message || "Verification failed.",
+            success: false,
+        });
+    }
+};
+
 // ─── Lemon Squeezy webhook ────────────────────────────────────────────────────
 export const lemonWebhook = async (req, res) => {
     try {
@@ -421,50 +600,13 @@ export const lemonWebhook = async (req, res) => {
                 return res.json({ received: true, skipped: "missing custom data" });
             }
 
-            const tx = await Transaction.findOneAndUpdate(
-                {
-                    user: userId,
-                    plan,
-                    billingCycle,
-                    paymentProvider: "lemon_squeezy",
-                    status: { $in: ["pending", "failed"] },
-                },
-                {
-                    status: "completed",
-                    transactionId: String(orderId),
-                    purchaseDate: new Date(),
-                    webhookVerified: true,
-                },
-                { new: true, sort: { createdAt: -1 } }
-            );
-
-            if (tx) {
-                await activateUserPlan(tx);
-            } else {
-                const alreadyDone = await Transaction.findOne({
-                    transactionId: String(orderId),
-                    status: "completed",
-                });
-                if (!alreadyDone) {
-                    const amount = PLAN_PRICES_USD[plan]?.[billingCycle] ?? 0;
-                    const created = await Transaction.create({
-                        user: userId,
-                        plan,
-                        amount,
-                        originalAmount: amount,
-                        billingCycle,
-                        paymentProvider: "lemon_squeezy",
-                        currency: "USD",
-                        razorpayOrderId: `lemon_${orderId}`,
-                        lemonSqueezyCheckoutId: `order_${orderId}`,
-                        transactionId: String(orderId),
-                        status: "completed",
-                        purchaseDate: new Date(),
-                        webhookVerified: true,
-                    });
-                    await activateUserPlan(created);
-                }
-            }
+            await completeLemonOrder({
+                userId,
+                plan,
+                billingCycle,
+                orderId,
+                webhookVerified: true,
+            });
         }
 
         if (eventName === "order_refunded") {

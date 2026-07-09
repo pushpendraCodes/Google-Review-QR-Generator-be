@@ -9,6 +9,7 @@ router.get("/pricing-region", ctrl.getPricingRegion);
 router.post("/create-order", protect, paymentLimiter, ctrl.createOrder);
 router.post("/create-lemon-checkout", protect, paymentLimiter, ctrl.createLemonCheckoutHandler);
 router.post("/verify-payment", protect, ctrl.verifyPayment);
+router.post("/verify-lemon-payment", protect, ctrl.verifyLemonPayment);
 router.post("/webhook", ctrl.webhook);                   // Razorpay — raw body
 router.post("/lemon-webhook", ctrl.lemonWebhook);        // Lemon Squeezy — raw body
 router.post("/payment-failed", protect, ctrl.paymentFailed);

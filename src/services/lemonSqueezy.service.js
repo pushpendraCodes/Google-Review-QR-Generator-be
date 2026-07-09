@@ -14,6 +14,19 @@ export const getLemonVariantId = (plan, billingCycle) => {
     return process.env[envKey] || "";
 };
 
+/** Reverse-map a Lemon variant ID back to plan + billing cycle. */
+export const getPlanFromVariantId = (variantId) => {
+    const id = String(variantId);
+    for (const plan of ["starter", "pro", "agency"]) {
+        for (const billingCycle of ["monthly", "annual"]) {
+            if (getLemonVariantId(plan, billingCycle) === id) {
+                return { plan, billingCycle };
+            }
+        }
+    }
+    return null;
+};
+
 export const isLemonSqueezyConfigured = () =>
     Boolean(
         process.env.LEMON_SQUEEZY_API_KEY &&
@@ -24,6 +37,7 @@ export const isLemonSqueezyConfigured = () =>
 /**
  * Creates a hosted Lemon Squeezy checkout. Prices are fixed on each variant in the LS dashboard (USD).
  * custom fields are returned on the webhook as meta.custom_data.
+ * [order_id] is replaced by Lemon on redirect so we can verify without waiting for webhooks.
  */
 export const createLemonCheckout = async ({
     variantId,
@@ -55,10 +69,9 @@ export const createLemonCheckout = async ({
                         },
                     },
                     product_options: {
-                        redirect_url: `${frontendUrl}/pricing?payment=success`,
+                        redirect_url: `${frontendUrl}/pricing?payment=success&order_id=[order_id]`,
                         enabled_variants: [Number(variantId)],
                     },
-                    preview: process.env.NODE_ENV !== "production",
                 },
                 relationships: {
                     store: {
@@ -78,4 +91,24 @@ export const createLemonCheckout = async ({
         checkoutId: data?.data?.id,
         checkoutUrl: attrs.url,
     };
+};
+
+/** Fetch a Lemon Squeezy order by ID (used to verify payment on redirect). */
+export const getLemonOrder = async (orderId) => {
+    const { data } = await axios.get(`${LS_API}/orders/${orderId}`, {
+        headers: lsHeaders(),
+    });
+    return data?.data ?? null;
+};
+
+/** Find recent Lemon orders for an email (fallback when redirect has no order_id). */
+export const findLemonOrdersByEmail = async (email) => {
+    const { data } = await axios.get(`${LS_API}/orders`, {
+        headers: lsHeaders(),
+        params: {
+            "filter[user_email]": email,
+            "page[size]": 5,
+        },
+    });
+    return data?.data ?? [];
 };
