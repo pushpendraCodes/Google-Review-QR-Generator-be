@@ -16,11 +16,11 @@
 1. Create a [Lemon Squeezy](https://lemonsqueezy.com) store.
 2. Create **6 one-time products** (or subscriptions if you prefer) with **fixed USD** prices matching `PLAN_PRICES_USD` in `be/src/utils/helpers.js`:
 
-   | Plan    | Monthly | Annual |
-   |---------|---------|--------|
-   | Starter | $9      | $75    |
-   | Pro     | $19     | $159   |
-   | Agency  | $39     | $327   |
+   | Plan    | Monthly | Annual | (INR equivalent) |
+   |---------|---------|--------|------------------|
+   | Starter | $2      | $2     | ₹199             |
+   | Pro     | $3      | $3     | ₹299             |
+   | Agency  | $10     | $10    | ₹999             |
 
 3. Copy each **variant ID** from the dashboard.
 4. Settings → API → create API key.
@@ -60,4 +60,4 @@ If you test locally, region defaults to **international** (USD). Use a VPN or te
 
 ## Adjust USD prices
 
-Edit `PLAN_PRICES_USD` in `be/src/utils/helpers.js` and the matching amounts in `fe-next/app/(main)/pricing/page.tsx` (`USD_PLANS`). **Lemon Squeezy variant prices in the dashboard must match.**
+Edit `PLAN_PRICES` in `be/src/utils/helpers.js` (USD is derived as rupees ÷ 100, rounded — e.g. ₹199 → $2). Mirror INR in `fe-next/lib/pricing.ts`. **Lemon Squeezy variant prices in the dashboard must match.**

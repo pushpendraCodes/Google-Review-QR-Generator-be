@@ -9,6 +9,9 @@ const adminUserSchema = new mongoose.Schema(
     role: { type: String, enum: ["superadmin", "admin"], default: "admin" },
     isActive: { type: Boolean, default: true },
     lastLoginAt: { type: Date, default: null },
+    emailOtp: { type: String, default: null, select: false },
+    emailOtpExpiry: { type: Date, default: null, select: false },
+    otpVerified: { type: Boolean, default: false, select: false },
   },
   { timestamps: true }
 );
@@ -28,6 +31,9 @@ adminUserSchema.methods.comparePassword = function (candidate) {
 adminUserSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password;
+  delete obj.emailOtp;
+  delete obj.emailOtpExpiry;
+  delete obj.otpVerified;
   return obj;
 };
 

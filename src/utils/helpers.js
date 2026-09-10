@@ -37,16 +37,29 @@ const getPlanExpiry = (billingCycle) => {
 
 // Plan prices in paise (Razorpay — India, smallest currency unit)
 const PLAN_PRICES = {
-  starter: { monthly: 29900, annual: 251300 },
-  pro: { monthly: 69900, annual: 587300 },
-  agency: { monthly: 149900, annual: 1259300 },
+  starter: { monthly: 19900, annual: 19900 },
+  pro: { monthly: 29900, annual: 29900 },
+  agency: { monthly: 99900, annual: 99900 },
 };
+
+/** INR rupees → USD dollars for display/checkout (₹199 → $2, ₹299 → $3, ₹999 → $10). */
+const inrPaiseToUsdCents = (paise) =>
+  Math.round(paise / 100 / 100) * 100;
 
 // Fixed USD prices in cents (Lemon Squeezy — international; must match variant prices in LS dashboard)
 const PLAN_PRICES_USD = {
-  starter: { monthly: 900, annual: 7500 },
-  pro: { monthly: 1900, annual: 15900 },
-  agency: { monthly: 3900, annual: 32700 },
+  starter: {
+    monthly: inrPaiseToUsdCents(PLAN_PRICES.starter.monthly),
+    annual: inrPaiseToUsdCents(PLAN_PRICES.starter.annual),
+  },
+  pro: {
+    monthly: inrPaiseToUsdCents(PLAN_PRICES.pro.monthly),
+    annual: inrPaiseToUsdCents(PLAN_PRICES.pro.annual),
+  },
+  agency: {
+    monthly: inrPaiseToUsdCents(PLAN_PRICES.agency.monthly),
+    annual: inrPaiseToUsdCents(PLAN_PRICES.agency.annual),
+  },
 };
 
 /** Country code from CDN / hosting headers (Vercel, Cloudflare). */
