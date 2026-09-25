@@ -168,6 +168,9 @@ export const createOrder = async (req, res) => {
         const duplicateError = assertNoDuplicateActivePlan(user, plan);
         if (duplicateError) return res.status(400).json({ message: duplicateError });
 
+        const originalAmount = PLAN_PRICES[plan][billingCycle];
+        const amount = originalAmount;
+
         const pendingTx = await Transaction.findOne({
             user: userId,
             status: "pending",
@@ -177,25 +180,38 @@ export const createOrder = async (req, res) => {
         if (pendingTx) {
             const ageMs = Date.now() - new Date(pendingTx.createdAt).getTime();
             const FIFTEEN_MIN = 15 * 60 * 1000;
+            let reusable = false;
 
-            if (ageMs < FIFTEEN_MIN) {
+            if (
+                ageMs < FIFTEEN_MIN &&
+                pendingTx.amount === amount &&
+                pendingTx.plan === plan &&
+                pendingTx.billingCycle === billingCycle &&
+                pendingTx.razorpayOrderId
+            ) {
+                try {
+                    const existingOrder = await razorpay.orders.fetch(pendingTx.razorpayOrderId);
+                    reusable = existingOrder?.status === "created";
+                } catch {
+                    reusable = false;
+                }
+            }
+
+            if (reusable) {
                 return res.json({
                     provider: "razorpay",
                     razorpayOrderId: pendingTx.razorpayOrderId,
                     amount: pendingTx.amount,
                     currency: "INR",
-                    keyId: process.env.RAZORPAY_KEY_ID,
+                    keyId: (process.env.RAZORPAY_KEY_ID || "").trim(),
                     resumed: true,
                 });
             }
 
             pendingTx.status = "failed";
-            pendingTx.failureReason = "Order expired (15 min timeout)";
+            pendingTx.failureReason = "Order expired or replaced";
             await pendingTx.save();
         }
-
-        const originalAmount = PLAN_PRICES[plan][billingCycle];
-        const amount = originalAmount;
 
         const receipt = `rcpt_${userId.toString().slice(-6)}_${Date.now()}`;
         const rpOrder = await razorpay.orders.create({
@@ -223,7 +239,7 @@ export const createOrder = async (req, res) => {
             razorpayOrderId: rpOrder.id,
             amount,
             currency: "INR",
-            keyId: process.env.RAZORPAY_KEY_ID,
+            keyId: (process.env.RAZORPAY_KEY_ID || "").trim(),
         });
     } catch (err) {
         console.error("Create order error:", err);
