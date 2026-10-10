@@ -18,6 +18,19 @@ const standeeConfigSchema = new mongoose.Schema({
   },
 }, { _id: false });
 
+const agencyPaymentSchema = new mongoose.Schema({
+  amount: { type: Number, required: true },
+  date: { type: Date, default: Date.now },
+  notes: { type: String, default: "" }
+});
+
+const agencyBillingSchema = new mongoose.Schema({
+  planType: { type: String, enum: ["monthly", "yearly", "none"], default: "none" },
+  price: { type: Number, default: 0 },
+  nextPaymentDate: { type: Date, default: null },
+  history: [agencyPaymentSchema]
+}, { _id: false });
+
 // ── Main schema ────────────────────────────────────────────────────────────────
 const qrCodeSchema = new mongoose.Schema(
   {
@@ -41,6 +54,9 @@ const qrCodeSchema = new mongoose.Schema(
     qrConfig: { type: qrConfigSchema, default: () => ({}) },
     standeeConfig: { type: standeeConfigSchema, default: () => ({}) },
 
+    // Agency billing config (for agency plan owners)
+    agencyBilling: { type: agencyBillingSchema, default: () => ({ planType: "none", price: 0, nextPaymentDate: null, history: [] }) },
+
     // Watermark flag (free plan)
     hasWatermark: { type: Boolean, default: true },
 
@@ -58,6 +74,7 @@ const qrCodeSchema = new mongoose.Schema(
     ],
 
     status: { type: String, enum: ["active", "archived"], default: "active" },
+    isActive: { type: Boolean, default: true },
 
   },
   {

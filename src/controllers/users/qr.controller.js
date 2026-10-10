@@ -300,6 +300,8 @@ export const updateQRCode = async (req, res) => {
   try {
     const {
       label,
+      isActive,
+      agencyBilling,
       // qrConfig fields
       color, shape, logoData,
       // standeeConfig fields
@@ -313,6 +315,7 @@ export const updateQRCode = async (req, res) => {
 
     // ── Label (any plan) ───────────────────────────────────────────────────────
     if (label !== undefined) qr.label = label;
+    if (isActive !== undefined) qr.isActive = isActive;
 
     // ── QR config ─────────────────────────────────────────────────────────────
     if (color !== undefined && canUseFeature(plan, "customColor")) {
@@ -348,6 +351,15 @@ export const updateQRCode = async (req, res) => {
 
     if (whiteLabel !== undefined && canUseFeature(plan, "whiteLabel")) {
       qr.standeeConfig.whiteLabel = whiteLabel;
+    }
+
+    // ── Agency Billing (Agency Plan Only) ─────────────────────────────────────
+    if (agencyBilling !== undefined && plan === "agency") {
+      qr.agencyBilling = {
+        ...qr.agencyBilling,
+        ...agencyBilling,
+        history: agencyBilling.history !== undefined ? agencyBilling.history : qr.agencyBilling.history
+      };
     }
 
     await qr.save();
@@ -446,6 +458,23 @@ export const scanRedirect = async (req, res) => {
       if (!qr) return res.status(404).send("QR code not found.");
       // Cache for 10 minutes — scan redirect is the hottest path
       await setCache(cacheKey, qr, 600);
+    }
+
+    if (qr.isActive === false) {
+      const owner = await User.findById(qr.owner).select("name").lean();
+      const ownerName = owner ? owner.name : "the owner";
+      return res.status(403).send(`
+        <html>
+          <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+          <body style="font-family: sans-serif; text-align: center; padding: 2rem; background: #f9f9f9;">
+            <div style="background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 400px; margin: 2rem auto;">
+              <h2 style="color: #d32f2f; margin-top: 0;">QR Code Inactive</h2>
+              <p style="color: #555; line-height: 1.5;">This QR code has been stopped by <strong>${ownerName}</strong>.</p>
+              <p style="color: #555; line-height: 1.5;">Please contact them to restart it.</p>
+            </div>
+          </body>
+        </html>
+      `);
     }
 
     // Increment scan count (fire-and-forget)
