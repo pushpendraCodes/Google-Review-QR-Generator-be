@@ -396,18 +396,52 @@ export const verifyPayment = async (req, res) => {
     }
 };
 
+const getRawWebhookBody = (req) => {
+    if (Buffer.isBuffer(req.body)) return req.body;
+    if (typeof req.body === "string") return Buffer.from(req.body);
+    return Buffer.from(JSON.stringify(req.body || {}));
+};
+
+const isLemonWebhookRequest = (req) => {
+    const lemonSig = req.headers["x-signature"];
+    const razorpaySig = req.headers["x-razorpay-signature"];
+    const eventName = req.headers["x-event-name"];
+    return Boolean((lemonSig && !razorpaySig) || eventName);
+};
+
+const verifyLemonSignature = (rawBody, signatureHeader, secret) => {
+    const expectedHex = crypto
+        .createHmac("sha256", String(secret).trim())
+        .update(rawBody)
+        .digest("hex");
+    const received = String(signatureHeader || "").trim();
+    const hmac = Buffer.from(expectedHex, "hex");
+    const signature = Buffer.from(received, "hex");
+    return (
+        signature.length > 0 &&
+        hmac.length === signature.length &&
+        crypto.timingSafeEqual(hmac, signature)
+    );
+};
+
 // ─── Razorpay webhook ─────────────────────────────────────────────────────────
 export const webhook = async (req, res) => {
     try {
+        // Lemon Squeezy is often configured to this same URL in the dashboard.
+        // Route those events to the Lemon handler instead of Razorpay HMAC.
+        if (isLemonWebhookRequest(req)) {
+            return lemonWebhook(req, res);
+        }
+
         const webhookSignature = req.headers["x-razorpay-signature"];
-        const rawBody = req.body;
+        const rawBody = getRawWebhookBody(req);
 
         const generated = crypto
-            .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
+            .createHmac("sha256", (process.env.RAZORPAY_WEBHOOK_SECRET || "").trim())
             .update(rawBody)
             .digest("hex");
 
-        if (generated !== webhookSignature) {
+        if (!webhookSignature || generated !== webhookSignature) {
             return res.status(400).json({ message: "Invalid webhook signature." });
         }
 
@@ -567,25 +601,16 @@ export const verifyLemonPayment = async (req, res) => {
 // ─── Lemon Squeezy webhook ────────────────────────────────────────────────────
 export const lemonWebhook = async (req, res) => {
     try {
-        const secret = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
+        const secret = (process.env.LEMON_SQUEEZY_WEBHOOK_SECRET || "").trim();
         if (!secret) {
             return res.status(500).json({ message: "Webhook secret not configured." });
         }
 
-        const rawBody = req.body;
+        const rawBody = getRawWebhookBody(req);
         const signatureHeader = req.headers["x-signature"] || "";
 
-        const hmac = Buffer.from(
-            crypto.createHmac("sha256", secret).update(rawBody).digest("hex"),
-            "hex"
-        );
-        const signature = Buffer.from(signatureHeader, "hex");
-
-        if (
-            signature.length === 0 ||
-            hmac.length !== signature.length ||
-            !crypto.timingSafeEqual(hmac, signature)
-        ) {
+        if (!verifyLemonSignature(rawBody, signatureHeader, secret)) {
+            console.error("Lemon webhook signature mismatch. Check LEMON_SQUEEZY_WEBHOOK_SECRET vs dashboard.");
             return res.status(400).json({ message: "Invalid webhook signature." });
         }
 
@@ -593,7 +618,8 @@ export const lemonWebhook = async (req, res) => {
         const eventName = payload.meta?.event_name;
         const custom = payload.meta?.custom_data || {};
         const orderId = payload.data?.id;
-        const orderStatus = payload.data?.attributes?.status;
+        const attrs = payload.data?.attributes || {};
+        const orderStatus = attrs.status;
 
         if (eventName === "order_created") {
             const normalizedStatus = String(orderStatus || "").toLowerCase();
@@ -608,11 +634,29 @@ export const lemonWebhook = async (req, res) => {
                 return res.json({ received: true, skipped: `order_status:${orderStatus || "unknown"}` });
             }
 
-            const userId = custom.user_id;
-            const plan = custom.plan;
-            const billingCycle = custom.billing_cycle || "monthly";
+            const variantId =
+                attrs.first_order_item?.variant_id ||
+                payload.data?.relationships?.variant?.data?.id;
+            const mapped = variantId ? getPlanFromVariantId(variantId) : null;
+
+            let userId = custom.user_id;
+            const plan = custom.plan || mapped?.plan;
+            const billingCycle = custom.billing_cycle || mapped?.billingCycle || "monthly";
+
+            if (!userId && attrs.user_email) {
+                const user = await User.findOne({
+                    email: String(attrs.user_email).toLowerCase().trim(),
+                }).select("_id");
+                userId = user?._id;
+            }
 
             if (!userId || !VALID_PLANS.includes(plan)) {
+                console.error("Lemon order_created missing user/plan", {
+                    orderId,
+                    hasUserId: Boolean(userId),
+                    plan,
+                    variantId,
+                });
                 return res.json({ received: true, skipped: "missing custom data" });
             }
 
