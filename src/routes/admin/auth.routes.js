@@ -3,7 +3,6 @@ import {
   login,
   logout,
   getMe,
-  seedAdmin,
   forgotPassword,
   verifyOtp,
   resetPassword,
@@ -20,7 +19,6 @@ router.post("/forgot-password", authLimiter, forgotPassword);
 router.post("/verify-otp", authLimiter, verifyOtp);
 router.post("/reset-password", authLimiter, resetPassword);
 router.post("/resend-otp", authLimiter, resendOtp);
-router.post("/seed", seedAdmin); // One-time setup — remove in production
 
 // Protected routes
 router.post("/logout", adminProtect, logout);

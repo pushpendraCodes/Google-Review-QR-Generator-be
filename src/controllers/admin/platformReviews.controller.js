@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import PlatformReview from "../../models/PlatformReview.js";
 import User from "../../models/User.js";
+import { delCache } from "../../utils/cache.js";
+import { FEATURED_CACHE_KEY } from "../users/platformReview.controller.js";
 
 const SORTS = {
   newest: { createdAt: -1 },
@@ -150,6 +152,7 @@ export const updatePlatformReview = async (req, res) => {
 
     const review = await PlatformReview.findByIdAndUpdate(req.params.id, update, { new: true }).lean();
     if (!review) return res.status(404).json({ message: "Review not found" });
+    await delCache(FEATURED_CACHE_KEY);
 
     return res.json({ message: "Review updated", review });
   } catch (err) {
@@ -168,6 +171,7 @@ export const deletePlatformReview = async (req, res) => {
     }
     const review = await PlatformReview.findByIdAndDelete(req.params.id);
     if (!review) return res.status(404).json({ message: "Review not found" });
+    await delCache(FEATURED_CACHE_KEY);
     return res.json({ message: "Review deleted" });
   } catch (err) {
     console.error("Admin deletePlatformReview error:", err);

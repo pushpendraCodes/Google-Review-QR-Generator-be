@@ -84,11 +84,6 @@ export const getMe = async (req, res) => {
 };
 
 /**
- * POST /api/admin/auth/seed
- * One-time seed: creates the first super-admin (only if zero admins exist).
- * REMOVE or guard this endpoint in production.
- */
-/**
  * POST /api/admin/auth/forgot-password
  * Body: { email }
  */
@@ -219,25 +214,5 @@ export const resendOtp = async (req, res) => {
   } catch (err) {
     console.error("Admin resend OTP error:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-};
-
-export const seedAdmin = async (req, res) => {
-  try {
-    const count = await AdminUser.countDocuments();
-    if (count > 0) {
-      return res.status(400).json({ message: "Admin already seeded" });
-    }
-
-    const { name = "Super Admin", email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password required" });
-    }
-
-    const admin = await AdminUser.create({ name, email, password, role: "superadmin" });
-    return res.status(201).json({ message: "Super admin created", admin: admin.toJSON() });
-  } catch (err) {
-    console.error("Seed error:", err);
-    return res.status(500).json({ message: "Internal server error" });
   }
 };
