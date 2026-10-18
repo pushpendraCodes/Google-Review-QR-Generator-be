@@ -2,15 +2,20 @@ import QRCode from "../../models/QRCode.js";
 import ScanLog from "../../models/ScanLog.js";
 import DailyMetric from "../../models/DailyMetric.js";
 import { getCache, setCache, invalidatePattern } from "../../utils/cache.js";
-import { getPlaceDetails } from "../../services/places.service.js";
+import { isGoogleDataStale, refreshQrsFromGoogle } from "../../services/googleSync.service.js";
+import { qrScope } from "../../services/team.service.js";
+import mongoose from "mongoose";
 
 // ─── Summary analytics for all user QR codes ─────────────────────────────────
-// GET /api/analytics/summary?range=7d
+// GET /api/analytics/summary?range=7d&qrId=<optional, one QR only>
 export const getSummary = async (req, res) => {
   try {
-    const range = req.query.range || "7d";
+    const range = ["7d", "30d", "90d"].includes(req.query.range) ? req.query.range : "7d";
+    const qrId = req.query.qrId ? String(req.query.qrId) : "";
+    if (qrId && !mongoose.isValidObjectId(qrId)) return res.status(404).json({ message: "QR code not found." });
+
     const userId = req.user._id.toString();
-    const cacheKey = `analytics:summary:${userId}:${range}`;
+    const cacheKey = `analytics:summary:${userId}:${range}:${qrId || "all"}`;
 
     // Check cache first
     const cached = await getCache(cacheKey);
@@ -19,9 +24,13 @@ export const getSummary = async (req, res) => {
     const days = range === "30d" ? 30 : range === "90d" ? 90 : 7;
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    // Get all QR codes owned by user
-    const qrCodes = await QRCode.find({ owner: req.user._id, status: "active" })
-      .select("_id businessName scanCount placeRating totalReviews latestReviews");
+    const allQrCodes = await QRCode.find({ ...qrScope(req), status: "active" }).sort({ createdAt: -1 });
+    const qrCodes = qrId ? allQrCodes.filter((q) => String(q._id) === qrId) : allQrCodes;
+    if (qrId && qrCodes.length === 0) return res.status(404).json({ message: "QR code not found." });
+
+    if (qrCodes.some((qr) => isGoogleDataStale(qr))) {
+      await refreshQrsFromGoogle(qrCodes);
+    }
     const qrIds = qrCodes.map((q) => q._id);
 
     const [totalScans, dailyScanData, trends, geoData, deviceData] = await Promise.all([
@@ -70,15 +79,30 @@ export const getSummary = async (req, res) => {
       ]),
     ]);
 
-    // Flatten and clean trends for frontend charts
-    const formattedTrends = trends.map(t => ({
-      date: t.date.toISOString().split("T")[0],
-      reviews: t.totalReviewsGrowth,
-      rating: t.avgRatingGrowth
+    // One point per day: total reviews and review-weighted rating across the selected QRs
+    const byDate = new Map();
+    for (const t of trends) {
+      const date = t.date.toISOString().split("T")[0];
+      const d = byDate.get(date) || { reviews: 0, weighted: 0, weight: 0 };
+      const reviews = t.totalReviewsGrowth || 0;
+      d.reviews += reviews;
+      if (t.avgRatingGrowth > 0) {
+        const w = Math.max(1, reviews);
+        d.weighted += t.avgRatingGrowth * w;
+        d.weight += w;
+      }
+      byDate.set(date, d);
+    }
+    const formattedTrends = [...byDate.entries()].map(([date, d]) => ({
+      date,
+      reviews: d.reviews,
+      rating: d.weight ? Math.round((d.weighted / d.weight) * 10) / 10 : 0,
     }));
 
     const result = {
       period: { range, days, since },
+      selectedQrId: qrId || null,
+      qrOptions: allQrCodes.map((q) => ({ id: q._id, businessName: q.businessName, placeAddress: q.placeAddress || "" })),
       totalQRCodes: qrCodes.length,
       totalScans,
       dailyScanData,
@@ -92,6 +116,7 @@ export const getSummary = async (req, res) => {
         currentRating: q.placeRating,
         totalReviews: q.totalReviews,
         latestReviews: q.latestReviews,
+        googleSyncedAt: q.googleSyncedAt,
       })),
     };
 
@@ -111,37 +136,31 @@ export const syncUserAnalytics = async (req, res) => {
   try {
     const userId = req.user._id.toString();
     
-    // 1. Get all active QRs for this user
-    const qrCodes = await QRCode.find({ owner: req.user._id, status: "active" });
+    // 1. Get all active QRs this person can see
+    const qrCodes = await QRCode.find({ ...qrScope(req), status: "active" });
     
     if (qrCodes.length === 0) {
       return res.json({ success: true, message: "No active QR codes to sync." });
     }
 
-    // 2. Map through each and fetch fresh details from Google
-    // Using Promise.all for speed, but keep an eye on quota if a user has many QRs
-    const results = await Promise.all(
-      qrCodes.map(async (qr) => {
-        try {
-          const details = await getPlaceDetails(qr.placeId);
-          qr.placeRating = details.rating;
-          qr.totalReviews = details.totalReviews;
-          qr.latestReviews = details.reviews;
-          await qr.save();
-          return { id: qr._id, status: "ok" };
-        } catch (err) {
-          console.error(`Sync failed for QR ${qr._id}:`, err.message);
-          return { id: qr._id, status: "failed", error: err.message };
-        }
-      })
-    );
+    const results = await refreshQrsFromGoogle(qrCodes, { force: true });
 
-    // 3. Invalidate summary cache for this user
     await invalidatePattern(`analytics:*:${userId}:*`);
+
+    const failed = results.filter((r) => r.status === "failed");
+    if (failed.length === results.length) {
+      return res.status(502).json({
+        success: false,
+        message: `Could not fetch data from Google: ${failed[0].error}`,
+        results,
+      });
+    }
 
     res.json({
       success: true,
-      message: "Sync complete.",
+      message: failed.length
+        ? `Synced ${results.length - failed.length} of ${results.length} QR codes.`
+        : "Sync complete.",
       results,
     });
   } catch (err) {

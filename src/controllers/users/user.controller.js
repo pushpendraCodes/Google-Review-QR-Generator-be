@@ -1,6 +1,11 @@
 import User from "../../models/User.js";
 import Transaction from "../../models/Transaction.js";
 import QRCode from "../../models/QRCode.js";
+import TeamInvite from "../../models/TeamInvite.js";
+import ClientAccount from "../../models/ClientAccount.js";
+import PaymentClaim from "../../models/PaymentClaim.js";
+import AgencyPaymentSettings from "../../models/AgencyPaymentSettings.js";
+import { serializeUser, clearUserCaches } from "../../services/team.service.js";
 import { getCache, setCache, delCache } from "../../utils/cache.js";
 import { uploadToCloudinary, deleteFromCloudinary } from "../../services/cloudinary.service.js";
 
@@ -36,10 +41,10 @@ export const getProfile = async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found." });
 
-    const result = { user };
+    const result = { user: await serializeUser(user), success: true };
     await setCache(cacheKey, result, 300); // 5 min
 
-    res.json({ user, success: true });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message, success: false });
   }
@@ -75,7 +80,7 @@ export const updateProfile = async (req, res) => {
     await user.save();
     await delCache(`user:profile:${req.user._id.toString()}`);
 
-    res.json({ message: "Profile updated.", user });
+    res.json({ message: "Profile updated.", user: await serializeUser(user) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -114,7 +119,7 @@ export const deleteAccount = async (req, res) => {
       plan: { $ne: null },
     }).sort({ purchaseDate: -1 });
 
-    if (activeSub && req.user.plan !== "free") {
+    if (!req.isStaff && activeSub && req.user.plan !== "free") {
       const expiry = await User.findById(req.user._id).select("planExpiresAt");
       if (expiry.planExpiresAt && new Date(expiry.planExpiresAt) > new Date()) {
         return res.status(400).json({
@@ -123,8 +128,18 @@ export const deleteAccount = async (req, res) => {
       }
     }
 
-    // Archive QR codes instead of hard delete
-    await QRCode.updateMany({ owner: req.user._id }, { status: "archived" });
+    // Archive QR codes instead of hard delete. A staff member's QRs belong to
+    // their agency owner, so they are left untouched.
+    if (!req.isStaff) {
+      await QRCode.updateMany({ owner: req.user._id }, { status: "archived" });
+      const staff = await User.find({ teamOwner: req.user._id }).select("_id").lean();
+      await User.updateMany({ teamOwner: req.user._id }, { teamOwner: null, teamJoinedAt: null });
+      await TeamInvite.updateMany({ owner: req.user._id, status: "pending" }, { status: "revoked" });
+      await ClientAccount.deleteMany({ agency: req.user._id });
+      await PaymentClaim.deleteMany({ agency: req.user._id });
+      await AgencyPaymentSettings.deleteOne({ agency: req.user._id });
+      await Promise.all(staff.map((s) => clearUserCaches(String(s._id))));
+    }
     await User.findByIdAndDelete(req.user._id);
 
     // Invalidate all user caches

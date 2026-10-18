@@ -36,6 +36,13 @@ const userSchema = new mongoose.Schema(
     plan: { type: String, enum: ["free", "starter", "pro", "agency"], default: "free" },
     planExpiresAt: { type: Date, default: null },
 
+    // Agency team: set when this user is a staff member of an Agency owner.
+    // Staff work inside the owner's account and use the owner's plan.
+    teamOwner: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    teamJoinedAt: { type: Date, default: null },
+    // Agency owners: purchased/admin-granted seats on top of the included ones.
+    extraSeats: { type: Number, default: 0, min: 0 },
+
     status: { type: String, enum: ["active", "block"], default: "active" },
     lastLoginAt: { type: Date, default: null },
     inactivityReminderSent: { type: Boolean, default: false },
@@ -45,6 +52,9 @@ const userSchema = new mongoose.Schema(
     // Plan expiry notification tracking
     planExpiryWarningSent: { type: Boolean, default: false },
     planExpiredNotifSent: { type: Boolean, default: false },
+    // When a paid plan ran out without renewal. QRs over the Free limit pause after the grace period.
+    planLapsedAt: { type: Date, default: null },
+    qrPauseNotifSent: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

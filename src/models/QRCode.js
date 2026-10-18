@@ -35,6 +35,9 @@ const agencyBillingSchema = new mongoose.Schema({
 const qrCodeSchema = new mongoose.Schema(
   {
     owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    // Person who created the QR. Differs from `owner` when an Agency staff member created it;
+    // null on QRs created before teams existed (treated as created by the owner).
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     businessName: { type: String, required: true, trim: true },
     label: { type: String, default: "" },
 
@@ -43,6 +46,7 @@ const qrCodeSchema = new mongoose.Schema(
     placeAddress: { type: String, default: "" },
     placeRating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
+    googleSyncedAt: { type: Date, default: null },
 
     // The actual Google review deep-link
     reviewUrl: { type: String, required: true },
@@ -75,6 +79,8 @@ const qrCodeSchema = new mongoose.Schema(
 
     status: { type: String, enum: ["active", "archived"], default: "active" },
     isActive: { type: Boolean, default: true },
+    // Over the Free plan limit after the owner's paid plan lapsed and the grace period ended.
+    planPaused: { type: Boolean, default: false },
 
   },
   {
@@ -92,6 +98,7 @@ qrCodeSchema.virtual("shortURL").get(function () {
 // Unique QR per user+business — enforces plan limits correctly
 qrCodeSchema.index({ owner: 1, placeId: 1 }, { unique: true });
 qrCodeSchema.index({ owner: 1, status: 1 });
+qrCodeSchema.index({ owner: 1, createdBy: 1, status: 1 });
 qrCodeSchema.index({ shortCode: 1 });
 
 export default mongoose.model("QRCode", qrCodeSchema);

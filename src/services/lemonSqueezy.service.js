@@ -14,6 +14,13 @@ export const getLemonVariantId = (plan, billingCycle) => {
     return process.env[envKey] || "";
 };
 
+/**
+ * Variant used for extra-seat purchases (price is always overridden with custom_price).
+ * Set LEMON_SQUEEZY_VARIANT_SEAT to a dedicated "Extra team seat" product; falls back to Agency monthly.
+ */
+export const getLemonSeatVariantId = () =>
+    process.env.LEMON_SQUEEZY_VARIANT_SEAT || getLemonVariantId("agency", "monthly");
+
 /** Reverse-map a Lemon variant ID back to plan + billing cycle. */
 export const getPlanFromVariantId = (variantId) => {
     const id = String(variantId);
@@ -45,6 +52,11 @@ export const createLemonCheckout = async ({
     userId,
     plan,
     billingCycle,
+    customPrice,              // cents; overrides the variant price (plan + extra seats, or seats only)
+    custom = {},              // extra fields echoed back as meta.custom_data on the webhook
+    productName,
+    productDescription,
+    redirectPath = "/pricing?payment=success&order_id=[order_id]",
 }) => {
     const storeId = process.env.LEMON_SQUEEZY_STORE_ID;
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -55,6 +67,7 @@ export const createLemonCheckout = async ({
             data: {
                 type: "checkouts",
                 attributes: {
+                    ...(customPrice ? { custom_price: Math.round(customPrice) } : {}),
                     checkout_options: {
                         embed: false,
                         media: false,
@@ -66,11 +79,14 @@ export const createLemonCheckout = async ({
                             user_id: String(userId),
                             plan,
                             billing_cycle: billingCycle,
+                            ...custom,
                         },
                     },
                     product_options: {
-                        redirect_url: `${frontendUrl}/pricing?payment=success&order_id=[order_id]`,
+                        redirect_url: `${frontendUrl}${redirectPath}`,
                         enabled_variants: [Number(variantId)],
+                        ...(productName ? { name: productName } : {}),
+                        ...(productDescription ? { description: productDescription } : {}),
                     },
                 },
                 relationships: {

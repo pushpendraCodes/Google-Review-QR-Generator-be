@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import User from "../../models/User.js";
 import { sendOtpEmail, sendWelcomeEmail } from "../../services/email.service.js";
 import { generateOTP, signAccessToken, signRefreshToken } from "../../utils/helpers.js";
+import { serializeUser } from "../../services/team.service.js";
 
 // ─── Helper: issue both tokens + persist refresh token ───────────────────────
 const issueTokens = async (user) => {
@@ -74,7 +75,7 @@ export const verifyEmail = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
-    res.json({ accessToken, user, firstLogin: user.firstLogin, success: true });
+    res.json({ accessToken, user: await serializeUser(user), firstLogin: user.firstLogin, success: true });
 
     // Send welcome email (fire-and-forget)
     sendWelcomeEmail(user.email, user.name).catch((err) =>
@@ -113,7 +114,7 @@ export const login = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
-    res.json({ accessToken, success: true, user, firstLogin: user.firstLogin });
+    res.json({ accessToken, success: true, user: await serializeUser(user), firstLogin: user.firstLogin });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -169,10 +170,8 @@ export const refreshAccessToken = async (req, res) => {
       console.log(err);
       return res.status(403).json({ message: "Invalid or expired refresh token." });
     }
-    console.log(decoded, "decoded")
     // Find user and check stored refresh token matches
     const user = await User.findById(decoded.id).select("+refreshToken -password");
-    console.log(user, token, "user")
     if (!user || user.refreshToken !== token)
       return res.status(403).json({ message: "Refresh token revoked or not found." });
 
@@ -190,7 +189,7 @@ export const refreshAccessToken = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    res.json({ accessToken, user });
+    res.json({ accessToken, user: await serializeUser(user) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -288,8 +287,8 @@ export const resendOtp = async (req, res) => {
 
 export const getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("+password");
-    res.json({ success: true, user });
+    const user = await User.findById(req.user._id);
+    res.json({ success: true, user: await serializeUser(user) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

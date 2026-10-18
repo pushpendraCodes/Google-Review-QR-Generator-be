@@ -1,16 +1,25 @@
 import QRCode from "../../models/QRCode.js";
 import ScanLog from "../../models/ScanLog.js";
+import DailyMetric from "../../models/DailyMetric.js";
 import User from "../../models/User.js";
 import { generateQRPng, generateQRSvg, generateQRPdf } from "../../services/qr.service.js";
 import { uploadToB2 } from "../../services/b2.service.js";
 import { buildReviewUrl } from "../../services/places.service.js";
-import { dataURLtoBuffer, generateShortCode, QR_LIMITS, canUseFeature } from "../../utils/helpers.js";
+import { dataURLtoBuffer, generateShortCode, QR_LIMITS, canUseFeature, hasActivePaidPlan } from "../../utils/helpers.js";
 import { getCache, setCache, delCache, invalidatePattern } from "../../utils/cache.js";
 import axios from "axios";
 import { deleteFromCloudinary, uploadToCloudinary } from "../../services/cloudinary.service.js";
 import QRDownload from "../../models/QRDownload.js";
 import { sendQrTipsEmail } from "../../services/email.service.js";
 import { generateReviewSuggestions } from "../../services/ai.service.js";
+import { refreshQrFromGoogle } from "../../services/googleSync.service.js";
+import { qrScope, invalidateQrCaches } from "../../services/team.service.js";
+import { notifyOwnerOfStaffAction } from "../../services/agencyNotify.service.js";
+import { shouldPauseExtraQrs, syncPlanPause } from "../../services/planGrace.service.js";
+
+const escapeHtml = (s = "") =>
+  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+import mongoose from "mongoose";
 
 // ─── Generate QR ──────────────────────────────────────────────────────────────
 // POST /api/qr/generate
@@ -52,7 +61,8 @@ export const generateQR = async (req, res) => {
     if (!businessName) return res.status(400).json({ success: false, message: "businessName is required." });
 
     const user = req.user;
-    const plan = user.plan;
+    const account = req.account;
+    const plan = account.plan;
 
     // ── Format gate ────────────────────────────────────────────────────────────
     if (format !== "png" && !canUseFeature(plan, "svgPdf")) {
@@ -63,13 +73,21 @@ export const generateQR = async (req, res) => {
       });
     }
 
-    // ── Check if QR already exists for this user+business ──────────────────────
-    const existing = await QRCode.findOne({ owner: user._id, placeId });
+    // ── Check if QR already exists for this account+business ───────────────────
+    const existing = await QRCode.findOne({ owner: account._id, placeId });
+    const reviving = existing?.status === "archived";
+
+    if (existing && !reviving && req.isStaff && String(existing.createdBy) !== String(user._id)) {
+      return res.status(409).json({
+        success: false,
+        message: "This business already has a QR code in your agency account. Ask your agency owner if you need access to it.",
+      });
+    }
 
     if (!existing) {
       // ── NEW QR: check plan limit ─────────────────────────────────────────────
       const qrLimit = QR_LIMITS[plan] ?? 1;
-      const currentCount = await QRCode.countDocuments({ owner: user._id, status: "active" });
+      const currentCount = await QRCode.countDocuments({ owner: account._id, status: "active" });
 
       if (currentCount >= qrLimit) {
         return res.status(403).json({
@@ -102,7 +120,7 @@ export const generateQR = async (req, res) => {
     if (logoData && typeof logoData === 'string' && logoData.startsWith('data:') && canUseFeature(plan, "logo")) {
       try {
         // Use stable public_id so re-uploads overwrite instead of creating dupes
-        const fileName = `logos_${user._id}_${placeId}`;
+        const fileName = `logos_${account._id}_${placeId}`;
         const buffer = dataURLtoBuffer(logoData);
         qrConfig.logoUrl = await uploadToCloudinary(buffer, fileName, "business_logo");
       } catch (err) {
@@ -124,7 +142,7 @@ export const generateQR = async (req, res) => {
 
     // ── Upsert: update config if existing, create if new ──────────────────────
     const qr = await QRCode.findOneAndUpdate(
-      { owner: user._id, placeId },
+      { owner: account._id, placeId },
       {
         $set: {
           businessName: label || businessName,
@@ -137,12 +155,15 @@ export const generateQR = async (req, res) => {
           standeeConfig,
           hasWatermark,
           status: "active",
+          // An archived QR brought back belongs to whoever revived it
+          ...(reviving ? { createdBy: user._id } : {}),
         },
         // Only set shortCode and owner on insert, never overwrite
         $setOnInsert: {
-          owner: user._id,
+          owner: account._id,
           placeId,
           shortCode: generateShortCode(),
+          ...(reviving ? {} : { createdBy: user._id }),
         },
       },
       {
@@ -155,27 +176,21 @@ export const generateQR = async (req, res) => {
     // ── Log this download event (for analytics — never blocks the response) ────
     QRDownload.create({
       qrCodeId: qr._id,
-      owner: user._id,
+      owner: account._id,
       format,
       planAtTime: plan,
     }).catch(err => console.error("Download log failed:", err.message));
 
+    // ── Replace client-sent rating/review count with live Google data ─────────
+    try {
+      await refreshQrFromGoogle(qr);
+    } catch (err) {
+      console.error("Google sync on generate failed:", err.message);
+    }
+
     // ── Invalidate caches ──────────────────────────────────────────────────────
-    const uid = user._id.toString();
-    await Promise.all([
-      invalidatePattern(`qr:list:${uid}:*`),
-      invalidatePattern(`analytics:*:${uid}:*`),
-      existing ? delCache(`qr:detail:${uid}:${qr._id}`) : Promise.resolve(),
-    ]);
+    await invalidateQrCaches(req, { qrId: qr._id, createdBy: existing?.createdBy });
 
-    return res.status(existing ? 200 : 201).json({
-      success: true,
-      message: existing ? "QR config updated." : "QR code created.",
-      isNew: !existing,
-      qr,
-    });
-
-    // Send usage tips email if it's a new QR (fire-and-forget)
     if (!existing && user.emailNotifications !== false) {
       sendQrTipsEmail(user.email, {
         userName: user.name,
@@ -183,6 +198,26 @@ export const generateQR = async (req, res) => {
       }).catch((err) => console.error("Tips email failed:", err.message));
     }
 
+    if (!existing || reviving) {
+      notifyOwnerOfStaffAction(req, {
+        title: "Your team added a QR code",
+        summary: "created a new Google Review QR code.",
+        details: [
+          ["Business", qr.businessName],
+          ["Address", qr.placeAddress],
+          ["Short link", qr.shortURL],
+        ],
+        path: "/dashboard/standees",
+        linkText: "View QR codes",
+      });
+    }
+
+    return res.status(existing ? 200 : 201).json({
+      success: true,
+      message: existing ? "QR config updated." : "QR code created.",
+      isNew: !existing,
+      qr,
+    });
   } catch (err) {
     // Duplicate key on shortCode is extremely rare but handle it
     if (err.code === 11000 && err.keyPattern?.shortCode) {
@@ -197,12 +232,11 @@ export const generateQR = async (req, res) => {
 export const checkUserPlan = async (req, res) => {
   try {
 
-    const user = req.user;
-    const plan = user.plan;
+    const plan = req.account.plan;
 
-    // ── Plan limits check ──────────────────────────────────────────────────────
+    // ── Plan limits check (limits are per account, shared by the whole team) ──
     const qrLimit = QR_LIMITS[plan] ?? 1;
-    const currentCount = await QRCode.countDocuments({ owner: user._id, status: "active" });
+    const currentCount = await QRCode.countDocuments({ owner: req.account._id, status: "active" });
 
     if (currentCount >= qrLimit) {
       return res.status(403).json({
@@ -225,17 +259,25 @@ export const checkUserPlan = async (req, res) => {
 };
 
 // ─── List QR codes ────────────────────────────────────────────────────────────
-// GET /api/qr?page=1&limit=10&search=salon
+// GET /api/qr?page=1&limit=10&search=salon&member=me|<staffUserId>
+// `member` is only honoured for account owners (staff always see just their own QRs).
 export const listQRCodes = async (req, res) => {
   try {
     const { page = 1, limit = 10, search } = req.query;
+    const member = req.isStaff ? "" : String(req.query.member || "");
     const userId = req.user._id.toString();
-    const cacheKey = `qr:list:${userId}:${page}:${limit}:${search || ""}`;
+    const cacheKey = `qr:list:${userId}:${page}:${limit}:${search || ""}:${member}`;
 
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const query = { owner: req.user._id, status: "active" };
+    const query = { ...qrScope(req), status: "active" };
+
+    if (member === "me") {
+      query.createdBy = { $in: [null, req.user._id] };
+    } else if (member && mongoose.isValidObjectId(member)) {
+      query.createdBy = member;
+    }
 
     if (search) {
       query.$or = [
@@ -246,6 +288,7 @@ export const listQRCodes = async (req, res) => {
 
     const [qrCodes, total] = await Promise.all([
       QRCode.find(query)
+        .populate("createdBy", "name email picture")
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(Number(limit)),
@@ -273,17 +316,15 @@ export const listQRCodes = async (req, res) => {
 // ─── Get single QR ────────────────────────────────────────────────────────────
 export const getQRCode = async (req, res) => {
   try {
-    console.log(req.user._id, "user")
-    console.log(req.params.id, "qrId")
     const userId = req.user._id.toString();
     const qrId = req.params.id;
+    if (!mongoose.isValidObjectId(qrId)) return res.status(404).json({ message: "QR code not found." });
     const cacheKey = `qr:detail:${userId}:${qrId}`;
 
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-
-    const qr = await QRCode.findOne({ _id: qrId, owner: req.user._id });
+    const qr = await QRCode.findOne({ _id: qrId, ...qrScope(req) });
     if (!qr) return res.status(404).json({ message: "QR code not found." });
 
     const result = { success: true, qr };
@@ -308,10 +349,13 @@ export const updateQRCode = async (req, res) => {
       template, bgColor, socialProof, language, whiteLabel,
     } = req.body;
 
-    const qr = await QRCode.findOne({ _id: req.params.id, owner: req.user._id });
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ success: false, message: "QR code not found." });
+    }
+    const qr = await QRCode.findOne({ _id: req.params.id, ...qrScope(req) });
     if (!qr) return res.status(404).json({ success: false, message: "QR code not found." });
 
-    const plan = req.user.plan;
+    const plan = req.account.plan;
 
     // ── Label (any plan) ───────────────────────────────────────────────────────
     if (label !== undefined) qr.label = label;
@@ -333,7 +377,7 @@ export const updateQRCode = async (req, res) => {
           await deleteFromCloudinary(qr.qrConfig.logoUrl);
         }
 
-        const fileName = `logos_${req.user._id}_${qr.placeId}`;
+        const fileName = `logos_${qr.owner}_${qr.placeId}`;
         const buffer = dataURLtoBuffer(logoData);
         qr.qrConfig.logoUrl = await uploadToCloudinary(buffer, fileName, "business_logo");
       } catch (err) {
@@ -364,11 +408,7 @@ export const updateQRCode = async (req, res) => {
 
     await qr.save();
 
-    const uid = req.user._id.toString();
-    await Promise.all([
-      delCache(`qr:detail:${uid}:${req.params.id}`),
-      invalidatePattern(`qr:list:${uid}:*`),
-    ]);
+    await invalidateQrCaches(req, { qrId: qr._id, createdBy: qr.createdBy });
 
     return res.json({ success: true, message: "QR code updated.", qr });
 
@@ -381,17 +421,14 @@ export const updateQRCode = async (req, res) => {
 // ─── Archive / Delete QR ──────────────────────────────────────────────────────
 export const deleteQRCode = async (req, res) => {
   try {
-    const qr = await QRCode.findOne({ _id: req.params.id, owner: req.user._id });
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: "QR code not found." });
+    const qr = await QRCode.findOne({ _id: req.params.id, ...qrScope(req) });
     if (!qr) return res.status(404).json({ message: "QR code not found." });
 
     qr.status = "archived";
     await qr.save();
 
-    // Invalidate caches
-    const userId = req.user._id.toString();
-    await delCache(`qr:detail:${userId}:${req.params.id}`);
-    await invalidatePattern(`qr:list:${userId}:*`);
-    await invalidatePattern(`analytics:*:${userId}:*`);
+    await invalidateQrCaches(req, { qrId: qr._id, createdBy: qr.createdBy });
 
     res.json({ message: "QR code archived." });
   } catch (err) {
@@ -403,30 +440,33 @@ export const deleteQRCode = async (req, res) => {
 // GET /api/qr/:id/download?format=svg
 export const downloadQRCode = async (req, res) => {
   try {
-    const qr = await QRCode.findOne({ _id: req.params.id, owner: req.user._id });
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: "QR code not found." });
+    const qr = await QRCode.findOne({ _id: req.params.id, ...qrScope(req) });
     if (!qr) return res.status(404).json({ message: "QR code not found." });
 
     const requestedFormat = req.query.format || qr.format;
-    const plan = req.user.plan;
+    const plan = req.account.plan;
 
     if (requestedFormat !== "png" && plan === "free") {
       return res.status(403).json({ message: "SVG/PDF download requires a paid plan." });
     }
 
-    const redirectUrl = `${process.env.BACKEND_URL || process.env.FRONTEND_URL}/r/${qr.shortCode}`;
+    // Printed QRs must always hit /r/ so scanRedirect can choose the destination
+    // by the owner's current plan (upgrades/downgrades apply to already-printed QRs).
+    const encodeUrl = `${process.env.BACKEND_URL || process.env.FRONTEND_URL}/r/${qr.shortCode}`;
 
     let fileBuffer, mimeType, ext;
     if (requestedFormat === "svg") {
-      fileBuffer = await generateQRSvg(redirectUrl, qr.customColor);
+      fileBuffer = await generateQRSvg(encodeUrl, qr.customColor);
       mimeType = "image/svg+xml";
       ext = "svg";
     } else if (requestedFormat === "pdf") {
-      const pngBuf = await generateQRPng(redirectUrl, qr.customColor, null, qr.hasWatermark);
-      fileBuffer = await generateQRPdf(redirectUrl, qr.businessName, pngBuf);
+      const pngBuf = await generateQRPng(encodeUrl, qr.customColor, null, qr.hasWatermark);
+      fileBuffer = await generateQRPdf(encodeUrl, qr.businessName, pngBuf);
       mimeType = "application/pdf";
       ext = "pdf";
     } else {
-      fileBuffer = await generateQRPng(redirectUrl, qr.customColor, null, qr.hasWatermark);
+      fileBuffer = await generateQRPng(encodeUrl, qr.customColor, null, qr.hasWatermark);
       mimeType = "image/png";
       ext = "png";
     }
@@ -477,6 +517,28 @@ export const scanRedirect = async (req, res) => {
       `);
     }
 
+    if (qr.planPaused) {
+      const owner = await User.findById(qr.owner).select("name businessName plan planExpiresAt planLapsedAt teamOwner").lean();
+      if (owner && !shouldPauseExtraQrs(owner)) {
+        // Renewed since the pause: resume right away instead of waiting for the hourly job
+        syncPlanPause(owner).catch((err) => console.error("Plan pause sync failed:", err.message));
+      } else {
+        const name = escapeHtml(qr.businessName || "this business");
+        return res.status(503).send(`
+        <html>
+          <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Temporarily unavailable</title></head>
+          <body style="font-family: sans-serif; text-align: center; padding: 2rem; background: #f9f9f9;">
+            <div style="background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 400px; margin: 2rem auto;">
+              <h2 style="color: #b45309; margin-top: 0;">Temporarily unavailable</h2>
+              <p style="color: #555; line-height: 1.5;">The review link for <strong>${name}</strong> is paused right now.</p>
+              <p style="color: #555; line-height: 1.5;">Please let the staff know, or try again later.</p>
+            </div>
+          </body>
+        </html>
+      `);
+      }
+    }
+
     // Increment scan count (fire-and-forget)
     QRCode.findByIdAndUpdate(qr._id, { $inc: { scanCount: 1 } }).exec();
 
@@ -502,13 +564,8 @@ export const scanRedirect = async (req, res) => {
 
     // ── Smart redirect: active paid plan → landing page, else → Google Review ──
     const owner = await User.findById(qr.owner).select("plan planExpiresAt").lean();
-    const hasActivePaidPlan =
-      owner &&
-      owner.plan !== "free" &&
-      owner.planExpiresAt &&
-      new Date(owner.planExpiresAt) > new Date();
 
-    if (hasActivePaidPlan) {
+    if (hasActivePaidPlan(owner)) {
       // Redirect to branded landing page with AI review suggestions
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
       return res.redirect(302, `${frontendUrl}/review/${shortCode}`);
@@ -539,12 +596,6 @@ export const getLandingData = async (req, res) => {
       .select("plan planExpiresAt businessName businessType")
       .lean();
 
-    const hasActivePaidPlan =
-      owner &&
-      owner.plan !== "free" &&
-      owner.planExpiresAt &&
-      new Date(owner.planExpiresAt) > new Date();
-
     const result = {
       success: true,
       businessName: qr.businessName,
@@ -553,7 +604,7 @@ export const getLandingData = async (req, res) => {
       totalReviews: qr.totalReviews,
       reviewUrl: qr.reviewUrl,
       placeAddress: qr.placeAddress,
-      aiEnabled: hasActivePaidPlan,
+      aiEnabled: hasActivePaidPlan(owner),
     };
 
     // Cache for 5 minutes
@@ -581,13 +632,7 @@ export const generateAIReviews = async (req, res) => {
       .select("plan planExpiresAt businessType")
       .lean();
 
-    const hasActivePaidPlan =
-      owner &&
-      owner.plan !== "free" &&
-      owner.planExpiresAt &&
-      new Date(owner.planExpiresAt) > new Date();
-
-    if (!hasActivePaidPlan) {
+    if (!hasActivePaidPlan(owner)) {
       return res.status(403).json({
         message: "AI review suggestions are not available for this business.",
       });
@@ -618,7 +663,8 @@ export const getQRAnalytics = async (req, res) => {
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const qr = await QRCode.findOne({ _id: qrId, owner: req.user._id });
+    if (!mongoose.isValidObjectId(qrId)) return res.status(404).json({ message: "QR code not found." });
+    const qr = await QRCode.findOne({ _id: qrId, ...qrScope(req) });
     if (!qr) return res.status(404).json({ message: "QR code not found." });
 
     const days = range === "30d" ? 30 : range === "90d" ? 90 : 7;

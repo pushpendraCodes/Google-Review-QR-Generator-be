@@ -11,7 +11,15 @@
 
 import axios from "axios";
 
-const PLACES_BASE = "https://maps.googleapis.com/maps/api/place";
+const PLACES_NEW_BASE = "https://places.googleapis.com/v1";
+
+function placesHeaders(fieldMask) {
+  return {
+    "X-Goog-Api-Key": process.env.GOOGLE_MAPS_API_KEY,
+    "X-Goog-FieldMask": fieldMask,
+    "Content-Type": "application/json",
+  };
+}
 
 /**
  * Search for businesses by text query.
@@ -23,25 +31,35 @@ const PLACES_BASE = "https://maps.googleapis.com/maps/api/place";
 async function searchBusinesses(query) {
   if (!query || query.trim().length < 2) return [];
 
-  const { data } = await axios.get(`${PLACES_BASE}/textsearch/json`, {
-    params: {
-      query,
-      key: process.env.GOOGLE_MAPS_API_KEY,
-      fields: "place_id,name,formatted_address,rating",
-      language: "en",
-    },
-  });
+  try {
+    const { data } = await axios.post(
+      `${PLACES_NEW_BASE}/places:searchText`,
+      {
+        textQuery: query,
+        languageCode: "en",
+        maxResultCount: 8,
+      },
+      {
+        headers: placesHeaders(
+          "places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount"
+        ),
+      }
+    );
 
-  if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
-    throw new Error(`Places API error: ${data.status} — ${data.error_message || ""}`);
+    return (data.places || []).slice(0, 8).map((p) => ({
+      placeId: p.id,
+      name: p.displayName?.text || "",
+      address: p.formattedAddress || "",
+      rating: p.rating || null,
+      totalReviews: p.userRatingCount || 0,
+    }));
+  } catch (err) {
+    const detail =
+      err.response?.data?.error?.message ||
+      err.response?.data?.message ||
+      err.message;
+    throw new Error(`Places API (New) search error: ${detail}`);
   }
-
-  return (data.results || []).slice(0, 8).map((p) => ({
-    placeId: p.place_id,
-    name: p.name,
-    address: p.formatted_address,
-    rating: p.rating || null,
-  }));
 }
 
 /**
@@ -52,35 +70,36 @@ async function searchBusinesses(query) {
  * @returns {{ placeId, name, address, website, phone, rating }}
  */
 async function getPlaceDetails(placeId) {
-  const { data } = await axios.get(`${PLACES_BASE}/details/json`, {
-    params: {
-      place_id: placeId,
-      key: process.env.GOOGLE_MAPS_API_KEY,
-      fields: "place_id,name,formatted_address,website,formatted_phone_number,rating,user_ratings_total,reviews",
-      language: "en",
-    },
-  });
+  try {
+    const { data } = await axios.get(`${PLACES_NEW_BASE}/places/${placeId}`, {
+      params: { languageCode: "en" },
+      headers: placesHeaders(
+        "id,displayName,formattedAddress,websiteUri,nationalPhoneNumber,rating,userRatingCount,reviews"
+      ),
+    });
 
-  if (data.status !== "OK") {
-    throw new Error(`Place details error: ${data.status} — ${data.error_message || ""}`);
+    return {
+      placeId: data.id,
+      name: data.displayName?.text || "",
+      address: data.formattedAddress || "",
+      website: data.websiteUri || "",
+      phone: data.nationalPhoneNumber || "",
+      rating: data.rating || null,
+      totalReviews: data.userRatingCount || 0,
+      reviews: (data.reviews || []).map((rev) => ({
+        authorName: rev.authorAttribution?.displayName || "Google User",
+        rating: rev.rating || 0,
+        text: rev.text?.text || "",
+        time: rev.publishTime ? Math.floor(new Date(rev.publishTime).getTime() / 1000) : 0,
+      })),
+    };
+  } catch (err) {
+    const detail =
+      err.response?.data?.error?.message ||
+      err.response?.data?.message ||
+      err.message;
+    throw new Error(`Places API (New) details error: ${detail}`);
   }
-
-  const r = data.result;
-  return {
-    placeId: r.place_id,
-    name: r.name,
-    address: r.formatted_address || "",
-    website: r.website || "",
-    phone: r.formatted_phone_number || "",
-    rating: r.rating || null,
-    totalReviews: r.user_ratings_total || 0,
-    reviews: (r.reviews || []).map(rev => ({
-      authorName: rev.author_name,
-      rating: rev.rating,
-      text: rev.text,
-      time: rev.time,
-    })),
-  };
 }
 
 

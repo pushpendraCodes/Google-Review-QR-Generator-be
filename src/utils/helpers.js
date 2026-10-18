@@ -35,31 +35,70 @@ const getPlanExpiry = (billingCycle) => {
   return now;
 };
 
-// Plan prices in paise (Razorpay — India, smallest currency unit)
-const PLAN_PRICES = {
-  starter: { monthly: 19900, annual: 19900 },
-  pro: { monthly: 29900, annual: 29900 },
-  agency: { monthly: 99900, annual: 99900 },
+// Paid plan with no expiry (e.g. granted manually) counts as active, matching planGuard.
+const hasActivePaidPlan = (user) => {
+  if (!user || !user.plan || user.plan === "free") return false;
+  if (!user.planExpiresAt) return true;
+  return new Date(user.planExpiresAt) > new Date();
 };
 
-/** INR rupees → USD dollars for display/checkout (₹199 → $2, ₹299 → $3, ₹999 → $10). */
-const inrPaiseToUsdCents = (paise) =>
-  Math.round(paise / 100 / 100) * 100;
+// ── Pricing (admin-editable) ──────────────────────────────────────────────────
+// Defaults used until the saved config is loaded from the database
+// (see services/pricing.service.js). All amounts are in paise (INR) / cents (USD).
+const DEFAULT_PRICING = {
+  plans: {
+    starter: { monthly: { INR: 19900, USD: 200 }, annual: { INR: 19900, USD: 200 } },
+    pro: { monthly: { INR: 29900, USD: 300 }, annual: { INR: 29900, USD: 300 } },
+    agency: { monthly: { INR: 99900, USD: 1000 }, annual: { INR: 99900, USD: 1000 } },
+  },
+  team: {
+    includedSeats: 1,   // included in the Agency plan (owner not counted)
+    maxSeats: 10,       // hard cap including purchased seats
+    seatPriceMonthly: { INR: 19900, USD: 200 },
+  },
+};
 
-// Fixed USD prices in cents (Lemon Squeezy — international; must match variant prices in LS dashboard)
-const PLAN_PRICES_USD = {
-  starter: {
-    monthly: inrPaiseToUsdCents(PLAN_PRICES.starter.monthly),
-    annual: inrPaiseToUsdCents(PLAN_PRICES.starter.annual),
-  },
-  pro: {
-    monthly: inrPaiseToUsdCents(PLAN_PRICES.pro.monthly),
-    annual: inrPaiseToUsdCents(PLAN_PRICES.pro.annual),
-  },
-  agency: {
-    monthly: inrPaiseToUsdCents(PLAN_PRICES.agency.monthly),
-    annual: inrPaiseToUsdCents(PLAN_PRICES.agency.annual),
-  },
+// Live objects: mutated in place by applyPricingConfig so existing imports stay current.
+const PLAN_PRICES = {};      // Razorpay (INR, paise)
+const PLAN_PRICES_USD = {};  // Lemon Squeezy (USD, cents)
+const SEAT_PRICE_MONTHLY = {};
+const teamSeats = { included: 1, max: 10 };
+
+const applyPricingConfig = (config) => {
+  for (const plan of ["starter", "pro", "agency"]) {
+    const p = config.plans[plan];
+    PLAN_PRICES[plan] = { monthly: p.monthly.INR, annual: p.annual.INR };
+    PLAN_PRICES_USD[plan] = { monthly: p.monthly.USD, annual: p.annual.USD };
+  }
+  SEAT_PRICE_MONTHLY.INR = config.team.seatPriceMonthly.INR;
+  SEAT_PRICE_MONTHLY.USD = config.team.seatPriceMonthly.USD;
+  teamSeats.included = config.team.includedSeats;
+  teamSeats.max = config.team.maxSeats;
+};
+applyPricingConfig(DEFAULT_PRICING);
+
+// ── Agency team seats ──────────────────────────────────────────────────────────
+const teamBaseSeats = () => teamSeats.included;
+const teamMaxSeats = () => teamSeats.max;
+const teamMaxExtraSeats = () => Math.max(0, teamSeats.max - teamSeats.included);
+
+const CYCLE_MONTHS = { monthly: 1, annual: 12 };
+
+/** Cost of carrying `seats` extra seats for a full billing cycle (added to Agency renewals). */
+const seatRenewalAmount = (seats, billingCycle, currency) =>
+  Math.max(0, seats || 0) * SEAT_PRICE_MONTHLY[currency] * (CYCLE_MONTHS[billingCycle] || 1);
+
+/**
+ * Pro-rated price for adding seats mid-plan: seats only last until the current plan expiry.
+ * A plan without an expiry date is charged as one month.
+ */
+const proratedSeatAmount = (seats, planExpiresAt, currency) => {
+  const msLeft = planExpiresAt ? new Date(planExpiresAt).getTime() - Date.now() : 30 * 86400000;
+  const days = Math.max(1, Math.ceil(msLeft / 86400000));
+  const raw = (seats * SEAT_PRICE_MONTHLY[currency] * days) / 30;
+  // INR is charged in whole rupees, USD to the cent.
+  const amount = currency === "INR" ? Math.ceil(raw / 100) * 100 : Math.ceil(raw);
+  return { amount, days };
 };
 
 /** Country code from CDN / hosting headers (Vercel, Cloudflare). */
@@ -115,6 +154,15 @@ export {
   signAccessToken,
   signRefreshToken,
   getPlanExpiry,
+  hasActivePaidPlan,
+  DEFAULT_PRICING,
+  applyPricingConfig,
+  teamBaseSeats,
+  teamMaxSeats,
+  teamMaxExtraSeats,
+  SEAT_PRICE_MONTHLY,
+  seatRenewalAmount,
+  proratedSeatAmount,
   PLAN_PRICES,
   PLAN_PRICES_USD,
   getCountryFromRequest,

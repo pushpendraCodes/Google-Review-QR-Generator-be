@@ -15,6 +15,8 @@ async function sendInactivityReminders() {
       inactivityReminderSent: false,
       emailNotifications: { $ne: false },
       status: "active",
+      teamOwner: null, // agency staff create QRs in their owner's account
+
     }).select("_id name email");
 
     console.log(`🔍 Found ${users.length} potential users for inactivity reminder.`);

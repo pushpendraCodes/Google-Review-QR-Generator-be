@@ -14,6 +14,7 @@ import dashboardRoutes from "./dashboard.routes.js";
 import usersRoutes from "./users.routes.js";
 import revenueRoutes from "./revenue.routes.js";
 import qrcodesRoutes from "./qrcodes.routes.js";
+import platformReviewsRoutes from "./platformReviews.routes.js";
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use("/dashboard", dashboardRoutes);
 router.use("/users", usersRoutes);
 router.use("/revenue", revenueRoutes);
 router.use("/qrcodes", qrcodesRoutes);
+router.use("/platform-reviews", platformReviewsRoutes);
 
 export default router;

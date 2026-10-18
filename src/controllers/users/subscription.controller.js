@@ -4,17 +4,26 @@ import Transaction from "../../models/Transaction.js";
 import User from "../../models/User.js";
 import {
     getPlanExpiry,
+    hasActivePaidPlan,
     PLAN_PRICES,
     PLAN_PRICES_USD,
     getPaymentRegion,
     resolveCheckoutCurrency,
+    teamMaxExtraSeats,
+    SEAT_PRICE_MONTHLY,
+    seatRenewalAmount,
+    proratedSeatAmount,
 } from "../../utils/helpers.js";
+import { getPublicPricing } from "../../services/pricing.service.js";
+import { extraSeatsOf } from "../../services/team.service.js";
+import { syncPlanPause } from "../../services/planGrace.service.js";
 import { getCache, setCache, delCache } from "../../utils/cache.js";
 import {
     createLemonCheckout,
     getLemonOrder,
     findLemonOrdersByEmail,
     getLemonVariantId,
+    getLemonSeatVariantId,
     getPlanFromVariantId,
     isLemonSqueezyConfigured,
 } from "../../services/lemonSqueezy.service.js";
@@ -34,15 +43,37 @@ const invalidateSubscriptionCaches = async (userId) => {
     await delCache(`user:profile:${id}`);
 };
 
+/** Adds purchased seats to the owner (capped). Call once per completed seats transaction. */
+const applySeatPurchase = async (tx) => {
+    const user = await User.findById(tx.user).select("extraSeats");
+    if (!user) return;
+    const next = Math.min(teamMaxExtraSeats(), extraSeatsOf(user) + Math.max(0, tx.seats || 0));
+    await User.updateOne({ _id: tx.user }, { extraSeats: next });
+    await invalidateSubscriptionCaches(tx.user);
+};
+
 const activateUserPlan = async (tx) => {
-    await User.findByIdAndUpdate(tx.user, {
+    if (tx.kind === "seats") return applySeatPurchase(tx);
+
+    const update = {
         plan: tx.plan,
         planExpiresAt: getPlanExpiry(tx.billingCycle),
         planExpiryWarningSent: false,
         planExpiredNotifSent: false,
-    });
+        planLapsedAt: null,
+        qrPauseNotifSent: false,
+    };
+    // Agency renewals carry the seats that were paid for; other plans have no team.
+    if (tx.plan !== "agency") update.extraSeats = 0;
+    else if (typeof tx.seats === "number") update.extraSeats = Math.min(teamMaxExtraSeats(), tx.seats);
+
+    await User.findByIdAndUpdate(tx.user, update);
     await invalidateSubscriptionCaches(tx.user);
+    await syncPlanPause(tx.user).catch((err) => console.error("Resume paused QRs failed:", err.message));
 };
+
+/** Extra seats to bill on an Agency purchase/renewal. */
+const seatsForPlanPurchase = (user, plan) => (plan === "agency" ? extraSeatsOf(user) : 0);
 
 const assertValidPlanRequest = (plan, billingCycle) => {
     if (!VALID_PLANS.includes(plan)) return "Invalid plan.";
@@ -72,6 +103,7 @@ const completeLemonOrder = async ({
     billingCycle,
     orderId,
     checkoutId,
+    seats,
     webhookVerified = false,
 }) => {
     const orderIdStr = String(orderId);
@@ -82,7 +114,8 @@ const completeLemonOrder = async ({
     });
     if (alreadyDone) {
         // Idempotent: ensure user plan is active even if a prior step only marked the tx.
-        await activateUserPlan(alreadyDone);
+        // Seat purchases add seats, so they must never be applied twice.
+        if (alreadyDone.kind !== "seats") await activateUserPlan(alreadyDone);
         return { tx: alreadyDone, activated: true, alreadyCompleted: true };
     }
 
@@ -90,6 +123,7 @@ const completeLemonOrder = async ({
         user: userId,
         plan,
         billingCycle,
+        kind: { $ne: "seats" },
         paymentProvider: "lemon_squeezy",
         status: { $in: ["pending", "failed"] },
     };
@@ -109,10 +143,12 @@ const completeLemonOrder = async ({
         return { tx, activated: true, alreadyCompleted: false };
     }
 
-    const amount = PLAN_PRICES_USD[plan]?.[billingCycle] ?? 0;
+    const fallbackSeats = plan === "agency" && Number.isInteger(seats) ? seats : undefined;
+    const amount = (PLAN_PRICES_USD[plan]?.[billingCycle] ?? 0) + seatRenewalAmount(fallbackSeats, billingCycle, "USD");
     tx = await Transaction.create({
         user: userId,
         plan,
+        seats: fallbackSeats,
         amount,
         originalAmount: amount,
         billingCycle,
@@ -129,6 +165,217 @@ const completeLemonOrder = async ({
     });
     await activateUserPlan(tx);
     return { tx, activated: true, alreadyCompleted: false };
+};
+
+const isDuplicateKeyError = (err) => err?.code === 11000;
+
+/**
+ * Mark a Lemon seat order paid and add the seats exactly once.
+ * The unique transactionId makes concurrent webhook + redirect calls safe.
+ */
+const completeLemonSeatOrder = async ({ userId, orderId, checkoutId, seats, webhookVerified = false }) => {
+    const orderIdStr = String(orderId);
+
+    const alreadyDone = await Transaction.findOne({ transactionId: orderIdStr, status: "completed" });
+    if (alreadyDone) return { tx: alreadyDone, alreadyCompleted: true };
+
+    const pendingFilter = {
+        user: userId,
+        kind: "seats",
+        paymentProvider: "lemon_squeezy",
+        status: { $in: ["pending", "failed"] },
+    };
+    if (checkoutId) pendingFilter.lemonSqueezyCheckoutId = String(checkoutId);
+    else if (Number.isInteger(seats)) pendingFilter.seats = seats;
+
+    try {
+        let tx = await Transaction.findOneAndUpdate(
+            pendingFilter,
+            { status: "completed", transactionId: orderIdStr, purchaseDate: new Date(), webhookVerified },
+            { new: true, sort: { createdAt: -1 } }
+        );
+
+        if (!tx) {
+            if (!Number.isInteger(seats) || seats < 1) return { tx: null, alreadyCompleted: false };
+            const user = await User.findById(userId).select("planExpiresAt");
+            const { amount } = proratedSeatAmount(seats, user?.planExpiresAt, "USD");
+            tx = await Transaction.create({
+                user: userId,
+                plan: "agency",
+                kind: "seats",
+                seats,
+                amount,
+                originalAmount: amount,
+                billingCycle: "monthly",
+                paymentProvider: "lemon_squeezy",
+                currency: "USD",
+                razorpayOrderId: `lemon_${orderIdStr}`,
+                lemonSqueezyCheckoutId: `order_${orderIdStr}`,
+                transactionId: orderIdStr,
+                status: "completed",
+                purchaseDate: new Date(),
+                webhookVerified,
+            });
+        }
+
+        await applySeatPurchase(tx);
+        return { tx, alreadyCompleted: false };
+    } catch (err) {
+        if (!isDuplicateKeyError(err)) throw err;
+        const tx = await Transaction.findOne({ transactionId: orderIdStr });
+        return { tx, alreadyCompleted: true };
+    }
+};
+
+/** Validates a seat purchase for an owner. Returns { error, status } or the quote. */
+const buildSeatQuote = (user, rawSeats, currency) => {
+    if (user.plan !== "agency" || !hasActivePaidPlan(user)) {
+        return { status: 403, error: "Extra seats need an active Agency plan." };
+    }
+    const current = extraSeatsOf(user);
+    const maxExtra = teamMaxExtraSeats();
+    const available = maxExtra - current;
+    if (available <= 0) {
+        return { status: 400, error: `You already have the maximum of ${maxExtra} extra seats.` };
+    }
+    const seats = Number(rawSeats);
+    if (!Number.isInteger(seats) || seats < 1 || seats > available) {
+        return { status: 400, error: `Choose between 1 and ${available} seat${available === 1 ? "" : "s"}.` };
+    }
+    const { amount, days } = proratedSeatAmount(seats, user.planExpiresAt, currency);
+    return {
+        seats,
+        currency,
+        amount,
+        days,
+        perSeatMonthly: SEAT_PRICE_MONTHLY[currency],
+        currentExtraSeats: current,
+        planExpiresAt: user.planExpiresAt,
+    };
+};
+
+// ─── Extra team seats ────────────────────────────────────────────────────────
+// GET /api/team/seats/quote?seats=2&currency=INR
+export const getSeatQuote = async (req, res) => {
+    try {
+        const currency = resolveCheckoutCurrency(req, req.query.currency);
+        const user = await User.findById(req.user._id).select("plan planExpiresAt extraSeats");
+        const quote = buildSeatQuote(user, req.query.seats, currency);
+        if (quote.error) return res.status(quote.status).json({ message: quote.error });
+        res.json(quote);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// POST /api/team/seats/checkout  { seats, currency }
+export const createSeatCheckout = async (req, res) => {
+    try {
+        const currency = resolveCheckoutCurrency(req, req.body?.currency);
+        const userId = req.user._id;
+        const user = await User.findById(userId).select("email plan planExpiresAt extraSeats");
+        const quote = buildSeatQuote(user, req.body?.seats, currency);
+        if (quote.error) return res.status(quote.status).json({ message: quote.error });
+
+        const { seats, amount } = quote;
+        const label = `${seats} extra team seat${seats === 1 ? "" : "s"}`;
+
+        if (currency === "INR") {
+            const rpOrder = await razorpay.orders.create({
+                amount,
+                currency: "INR",
+                receipt: `seat_${userId.toString().slice(-6)}_${Date.now()}`,
+                notes: { kind: "seats", seats: String(seats) },
+            });
+            await Transaction.create({
+                user: userId,
+                plan: "agency",
+                kind: "seats",
+                seats,
+                amount,
+                originalAmount: amount,
+                billingCycle: "monthly",
+                paymentProvider: "razorpay",
+                currency: "INR",
+                razorpayOrderId: rpOrder.id,
+                idempotencyKey: `seats_${userId}_${rpOrder.id}`,
+                status: "pending",
+            });
+            return res.json({
+                provider: "razorpay",
+                razorpayOrderId: rpOrder.id,
+                amount,
+                currency: "INR",
+                keyId: (process.env.RAZORPAY_KEY_ID || "").trim(),
+                seats,
+                label,
+            });
+        }
+
+        if (!isLemonSqueezyConfigured()) {
+            return res.status(503).json({ message: "International payments are not configured yet. Please contact support." });
+        }
+        const variantId = getLemonSeatVariantId();
+        if (!variantId) {
+            return res.status(503).json({ message: "No Lemon Squeezy variant configured for extra seats." });
+        }
+
+        const { checkoutId, checkoutUrl } = await createLemonCheckout({
+            variantId,
+            userEmail: user.email,
+            userId,
+            plan: "agency",
+            billingCycle: "monthly",
+            customPrice: amount,
+            custom: { kind: "seats", seats: String(seats) },
+            productName: `Extra team seats (${seats})`,
+            productDescription: `${label} until your Agency plan renews (${quote.days} day${quote.days === 1 ? "" : "s"}).`,
+            redirectPath: "/dashboard/team?seats=success&order_id=[order_id]",
+        });
+
+        await Transaction.create({
+            user: userId,
+            plan: "agency",
+            kind: "seats",
+            seats,
+            amount,
+            originalAmount: amount,
+            billingCycle: "monthly",
+            paymentProvider: "lemon_squeezy",
+            currency: "USD",
+            razorpayOrderId: `lemon_${checkoutId}`,
+            lemonSqueezyCheckoutId: String(checkoutId),
+            lemonCheckoutUrl: checkoutUrl,
+            idempotencyKey: `ls_seats_${userId}_${checkoutId}`,
+            status: "pending",
+        });
+
+        res.json({ provider: "lemon_squeezy", checkoutId, checkoutUrl, amount, currency: "USD", seats, label });
+    } catch (err) {
+        console.error("Create seat checkout error:", err?.response?.data || err);
+        res.status(500).json({ message: err?.response?.data?.errors?.[0]?.detail || err.message });
+    }
+};
+
+/** Undo a refunded transaction: seats are removed, plans fall back to free. */
+const revokeRefundedTransaction = async (tx) => {
+    if (tx.kind === "seats") {
+        const user = await User.findById(tx.user).select("extraSeats");
+        if (user) {
+            const next = Math.max(0, extraSeatsOf(user) - Math.max(0, tx.seats || 0));
+            await User.updateOne({ _id: tx.user }, { extraSeats: next });
+        }
+    } else {
+        await User.findByIdAndUpdate(tx.user, { plan: "free", planExpiresAt: null, extraSeats: 0 });
+    }
+    await invalidateSubscriptionCaches(tx.user);
+};
+
+// ─── Public pricing (plans + team seats, admin-editable) ─────────────────────
+// GET /api/subscription/pricing
+export const getPricingConfig = (req, res) => {
+    res.set("Cache-Control", "public, max-age=60");
+    res.json(getPublicPricing());
 };
 
 // ─── Pricing region (India vs international) ─────────────────────────────────
@@ -168,13 +415,15 @@ export const createOrder = async (req, res) => {
         const duplicateError = assertNoDuplicateActivePlan(user, plan);
         if (duplicateError) return res.status(400).json({ message: duplicateError });
 
-        const originalAmount = PLAN_PRICES[plan][billingCycle];
+        const seats = seatsForPlanPurchase(user, plan);
+        const originalAmount = PLAN_PRICES[plan][billingCycle] + seatRenewalAmount(seats, billingCycle, "INR");
         const amount = originalAmount;
 
         const pendingTx = await Transaction.findOne({
             user: userId,
             status: "pending",
             paymentProvider: "razorpay",
+            kind: { $ne: "seats" },
         });
 
         if (pendingTx) {
@@ -224,6 +473,7 @@ export const createOrder = async (req, res) => {
         await Transaction.create({
             user: userId,
             plan,
+            seats: plan === "agency" ? seats : undefined,
             amount,
             originalAmount,
             billingCycle,
@@ -285,13 +535,23 @@ export const createLemonCheckoutHandler = async (req, res) => {
             user: userId,
             status: "pending",
             paymentProvider: "lemon_squeezy",
+            kind: { $ne: "seats" },
         });
 
         if (pendingTx) {
             const ageMs = Date.now() - new Date(pendingTx.createdAt).getTime();
             const FIFTEEN_MIN = 15 * 60 * 1000;
 
-            if (ageMs < FIFTEEN_MIN && pendingTx.lemonSqueezyCheckoutId) {
+            const expectedAmount =
+                PLAN_PRICES_USD[plan][billingCycle] +
+                seatRenewalAmount(seatsForPlanPurchase(user, plan), billingCycle, "USD");
+            if (
+                ageMs < FIFTEEN_MIN &&
+                pendingTx.lemonSqueezyCheckoutId &&
+                pendingTx.plan === plan &&
+                pendingTx.billingCycle === billingCycle &&
+                pendingTx.amount === expectedAmount
+            ) {
                 const checkoutUrl = pendingTx.lemonCheckoutUrl;
                 if (checkoutUrl) {
                     return res.json({
@@ -310,19 +570,25 @@ export const createLemonCheckoutHandler = async (req, res) => {
             await pendingTx.save();
         }
 
-        const originalAmount = PLAN_PRICES_USD[plan][billingCycle];
+        const seats = seatsForPlanPurchase(user, plan);
+        const seatAmount = seatRenewalAmount(seats, billingCycle, "USD");
+        const originalAmount = PLAN_PRICES_USD[plan][billingCycle] + seatAmount;
         const { checkoutId, checkoutUrl } = await createLemonCheckout({
             variantId,
             userEmail: user.email,
             userId,
             plan,
             billingCycle,
+            // Always charge the admin-configured price, whatever the variant is set to in Lemon.
+            customPrice: originalAmount,
+            custom: plan === "agency" ? { seats: String(seats) } : undefined,
         });
 
         const idempotencyKey = `ls_${userId}_${plan}_${billingCycle}_${checkoutId}`;
         await Transaction.create({
             user: userId,
             plan,
+            seats: plan === "agency" ? seats : undefined,
             amount: originalAmount,
             originalAmount,
             billingCycle,
@@ -478,10 +744,7 @@ export const webhook = async (req, res) => {
                     { status: "refunded" },
                     { new: true }
                 );
-                if (tx) {
-                    await User.findByIdAndUpdate(tx.user, { plan: "free", planExpiresAt: null });
-                    await invalidateSubscriptionCaches(tx.user);
-                }
+                if (tx) await revokeRefundedTransaction(tx);
             }
         }
 
@@ -500,6 +763,7 @@ export const webhook = async (req, res) => {
 export const verifyLemonPayment = async (req, res) => {
     try {
         let { orderId } = req.body;
+        const isSeatOrder = req.body?.kind === "seats";
 
         if (!isLemonSqueezyConfigured()) {
             return res.status(503).json({
@@ -511,6 +775,7 @@ export const verifyLemonPayment = async (req, res) => {
         const pendingTx = await Transaction.findOne({
             user: req.user._id,
             paymentProvider: "lemon_squeezy",
+            kind: isSeatOrder ? "seats" : { $ne: "seats" },
             status: { $in: ["pending", "failed"] },
         }).sort({ createdAt: -1 });
 
@@ -557,6 +822,31 @@ export const verifyLemonPayment = async (req, res) => {
             return res.status(403).json({
                 message: "This order does not belong to your account.",
                 success: false,
+            });
+        }
+
+        if (isSeatOrder) {
+            const already = await Transaction.findOne({ transactionId: String(order.id), status: "completed" });
+            if (!already) {
+                if (!pendingTx) {
+                    return res.status(404).json({ message: "No pending seat purchase found.", success: false });
+                }
+                // Guards against redeeming an unrelated (cheaper) paid order for seats.
+                const paid = Number(order.attributes?.subtotal ?? order.attributes?.total ?? 0);
+                if (paid < pendingTx.amount) {
+                    return res.status(400).json({ message: "This order does not match your seat purchase.", success: false });
+                }
+            }
+            const { tx, alreadyCompleted } = await completeLemonSeatOrder({
+                userId: req.user._id,
+                orderId: order.id,
+                checkoutId: already ? undefined : pendingTx.lemonSqueezyCheckoutId,
+                webhookVerified: false,
+            });
+            return res.json({
+                message: alreadyCompleted ? "Seats already added." : "Payment verified. Seats added!",
+                success: true,
+                transaction: tx,
             });
         }
 
@@ -660,13 +950,20 @@ export const lemonWebhook = async (req, res) => {
                 return res.json({ received: true, skipped: "missing custom data" });
             }
 
-            await completeLemonOrder({
-                userId,
-                plan,
-                billingCycle,
-                orderId,
-                webhookVerified: true,
-            });
+            const seats = custom.seats != null ? parseInt(custom.seats, 10) : undefined;
+
+            if (custom.kind === "seats") {
+                await completeLemonSeatOrder({ userId, orderId, seats, webhookVerified: true });
+            } else {
+                await completeLemonOrder({
+                    userId,
+                    plan,
+                    billingCycle,
+                    orderId,
+                    seats: Number.isInteger(seats) ? seats : undefined,
+                    webhookVerified: true,
+                });
+            }
         }
 
         if (eventName === "order_refunded") {
@@ -676,10 +973,7 @@ export const lemonWebhook = async (req, res) => {
                 { status: "refunded" },
                 { new: true }
             );
-            if (tx) {
-                await User.findByIdAndUpdate(tx.user, { plan: "free", planExpiresAt: null });
-                await invalidateSubscriptionCaches(tx.user);
-            }
+            if (tx) await revokeRefundedTransaction(tx);
         }
 
         res.json({ received: true });
@@ -712,6 +1006,11 @@ export const paymentFailed = async (req, res) => {
 // ─── Active subscription ──────────────────────────────────────────────────────
 export const getActiveSubscription = async (req, res) => {
     try {
+        if (req.isStaff) {
+            const { plan, planExpiresAt } = req.account;
+            return res.json({ plan, planExpiresAt, isActive: req.teamActive, managedByTeamOwner: true });
+        }
+
         const userId = req.user._id.toString();
         const cacheKey = `sub:active:${userId}`;
 
@@ -719,10 +1018,7 @@ export const getActiveSubscription = async (req, res) => {
         if (cached) return res.json(cached);
 
         const user = await User.findById(req.user._id).select("plan planExpiresAt");
-        const isActive =
-            user.plan !== "free" &&
-            user.planExpiresAt &&
-            new Date(user.planExpiresAt) > new Date();
+        const isActive = hasActivePaidPlan(user);
 
         const result = {
             plan: user.plan,

@@ -10,6 +10,12 @@ const transactionSchema = new mongoose.Schema(
     couponApplied: { type: String, default: "" },
     billingCycle: { type: String, enum: ["monthly", "annual"], required: true },
 
+    // "plan" = plan purchase/renewal, "seats" = extra Agency team seats bought mid-plan
+    kind: { type: String, enum: ["plan", "seats"], default: "plan" },
+    // plan: extra seats included in an Agency renewal; seats: number of seats bought.
+    // No default so older transactions stay `undefined` and never reset seats.
+    seats: { type: Number },
+
     paymentProvider: {
       type: String,
       enum: ["razorpay", "lemon_squeezy"],

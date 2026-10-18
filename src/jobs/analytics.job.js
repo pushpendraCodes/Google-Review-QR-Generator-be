@@ -2,7 +2,7 @@ import cron from "node-cron";
 import QRCode from "../models/QRCode.js";
 import ScanLog from "../models/ScanLog.js";
 import DailyMetric from "../models/DailyMetric.js";
-import { getPlaceDetails } from "../services/places.service.js";
+import { refreshQrFromGoogle } from "../services/googleSync.service.js";
 
 async function snapshotAnalytics() {
   console.log("📈 Starting daily analytics snapshot...");
@@ -17,8 +17,8 @@ async function snapshotAnalytics() {
 
     for (const qr of activeQRs) {
       try {
-        // 1. Fetch latest details from Google
-        const details = await getPlaceDetails(qr.placeId);
+        // 1. Fetch latest details from Google and save them on the QR
+        const details = await refreshQrFromGoogle(qr);
 
         // 2. Aggregate scans for the previous day
         const scanCount = await ScanLog.countDocuments({
@@ -74,13 +74,6 @@ async function snapshotAnalytics() {
           { upsert: true }
         );
 
-        // 5. Sync the main QRCode model with latest numbers and reviews
-        qr.placeRating = details.rating;
-        qr.totalReviews = details.totalReviews;
-        qr.latestReviews = details.reviews;
-        await qr.save();
-
-
         console.log(`✅ Snapshot complete for: ${qr.businessName}`);
       } catch (err) {
         console.error(`❌ Failed snapshot for QR ${qr._id}:`, err.message);
@@ -95,7 +88,7 @@ async function snapshotAnalytics() {
 
 function startAnalyticsJob() {
   // Runs daily at midnight (00:00)
-  cron.schedule("51 14 * * *", snapshotAnalytics, {
+  cron.schedule("0 0 * * *", snapshotAnalytics, {
     timezone: "Asia/Kolkata",
   });
   console.log("📅 Analytics snapshot scheduled for 00:00 IST daily");

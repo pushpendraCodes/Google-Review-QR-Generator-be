@@ -12,11 +12,17 @@ import analyticsRoutes from "./routes/analytics.routes.js";
 import placesRoutes from "./routes/places.routes.js";
 import contactRoutes from "./routes/contactRoute.js";
 import platformReviewRoutes from "./routes/platformReview.routes.js";
+import gbpRoutes from "./routes/gbp.routes.js";
+import teamRoutes from "./routes/team.routes.js";
+import clientsRoutes from "./routes/clients.routes.js";
+import clientPortalRoutes from "./routes/clientPortal.routes.js";
 import adminAuthRoutes from "./routes/admin/auth.routes.js";
 import adminDashboardRoutes from "./routes/admin/dashboard.routes.js";
 import adminUsersRoutes from "./routes/admin/users.routes.js";
 import adminRevenueRoutes from "./routes/admin/revenue.routes.js";
 import adminQRCodesRoutes from "./routes/admin/qrcodes.routes.js";
+import adminPlatformReviewsRoutes from "./routes/admin/platformReviews.routes.js";
+import adminSettingsRoutes from "./routes/admin/settings.routes.js";
 
 const app = express();
 
@@ -51,6 +57,10 @@ app.use("/api/places", placesRoutes);         // business search
 app.use("/r", qrRoutes);                      // scan redirect /r/:shortCode
 app.use("/api/contact", contactRoutes);
 app.use("/api/reviews", platformReviewRoutes);
+app.use("/api/gbp", gbpRoutes);
+app.use("/api/team", teamRoutes);
+app.use("/api/clients", clientsRoutes);
+app.use("/api/client-portal", clientPortalRoutes);
 
 
 // admin routes
@@ -59,6 +69,8 @@ app.use("/api/admin/dashboard", adminDashboardRoutes);
 app.use("/api/admin/users", adminUsersRoutes);
 app.use("/api/admin/revenue", adminRevenueRoutes);
 app.use("/api/admin/qrCodes", adminQRCodesRoutes);
+app.use("/api/admin/platform-reviews", adminPlatformReviewsRoutes);
+app.use("/api/admin/settings", adminSettingsRoutes);
 
 
 

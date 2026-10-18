@@ -288,7 +288,7 @@ const sendEnquiryEmail = ({ name, email, phone, message }) => {
 };
 
 // ─── Plan Expiring Soon ──────────────────────────────────────────────────────
-const sendPlanExpiringEmail = (to, { userName, plan, expiresAt }) => {
+const sendPlanExpiringEmail = (to, { userName, plan, expiresAt, graceDays = 15 }) => {
   const expDate = new Date(expiresAt).toLocaleDateString("en-IN", {
     day: "numeric",
     month: "long",
@@ -303,7 +303,8 @@ const sendPlanExpiringEmail = (to, { userName, plan, expiresAt }) => {
       <div style="background: #fef3cd; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #f59e0b;">
         <p style="margin: 0; font-size: 15px; color: #92400e;">
           <strong>What happens after expiry?</strong><br/>
-          Your QR codes will continue to work, but customers will be redirected directly to your Google review page without the branded landing page and AI review suggestions.
+          Customers will be redirected straight to your Google review page without the branded landing page and AI review suggestions.
+          The Free plan includes 1 QR code: if you have more, the extra ones stop working ${graceDays} days after expiry until you renew.
         </p>
       </div>
       <p>Renew now to keep enjoying:</p>
@@ -318,7 +319,7 @@ const sendPlanExpiringEmail = (to, { userName, plan, expiresAt }) => {
       text: "Renew My Plan",
       link: `${process.env.FRONTEND_URL}/pricing`,
     },
-    footerText: "Your QR codes will still redirect to Google Reviews even after expiry.",
+    footerText: `Renew within ${graceDays} days of expiry to keep every QR code working.`,
   });
 
   return sendEmail({
@@ -329,19 +330,30 @@ const sendPlanExpiringEmail = (to, { userName, plan, expiresAt }) => {
 };
 
 // ─── Plan Expired ────────────────────────────────────────────────────────────
-const sendPlanExpiredEmail = (to, { userName, plan }) => {
+const sendPlanExpiredEmail = (to, { userName, plan, pauseOn = null, extraQrs = 0 }) => {
   const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
+  const pauseDate = pauseOn
+    ? new Date(pauseOn).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
+    : "";
 
   const html = baseLayout({
     title: `Your ${planLabel} plan has expired`,
     content: `
       <p>Hi ${userName}, your <span class="accent">${planLabel}</span> subscription has ended.</p>
-      <div style="background: #f0fdf4; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #1D9E75;">
-        <p style="margin: 0; font-size: 15px; color: #166534;">
-          <strong>Don't worry — your QR codes still work!</strong><br/>
-          Customers scanning your QR will be redirected directly to your Google review page. You won't lose any reviews.
+      ${extraQrs > 0 && pauseDate
+        ? `<div style="background: #fef2f2; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #dc2626;">
+        <p style="margin: 0; font-size: 15px; color: #991b1b;">
+          <strong>${extraQrs} of your QR codes will stop working on ${pauseDate}.</strong><br/>
+          The Free plan includes 1 QR code. Your most-scanned QR keeps working; the others are paused on that date until you renew.
+          Customers scanning a paused QR see a "temporarily unavailable" page.
         </p>
-      </div>
+      </div>`
+        : `<div style="background: #f0fdf4; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #1D9E75;">
+        <p style="margin: 0; font-size: 15px; color: #166534;">
+          <strong>Your QR code still works.</strong><br/>
+          Customers scanning it will be redirected directly to your Google review page.
+        </p>
+      </div>`}
       <p>However, you're now missing out on:</p>
       <div style="display: flex; flex-direction: column; gap: 10px; margin: 20px 0;">
         <div style="background: #fef2f2; padding: 12px 16px; border-radius: 8px; font-size: 14px; color: #991b1b;">
@@ -360,7 +372,9 @@ const sendPlanExpiredEmail = (to, { userName, plan }) => {
       text: "Resubscribe Now",
       link: `${process.env.FRONTEND_URL}/pricing`,
     },
-    footerText: "Your QR codes continue to work — they just redirect directly to Google Reviews.",
+    footerText: extraQrs > 0 && pauseDate
+      ? `Renew before ${pauseDate} to keep all your QR codes working.`
+      : "Your QR code continues to work and redirects directly to Google Reviews.",
   });
 
   return sendEmail({
@@ -371,7 +385,138 @@ const sendPlanExpiredEmail = (to, { userName, plan }) => {
 };
 
 
+// ─── Agency team invite ──────────────────────────────────────────────────────
+const escapeHtml = (s = "") =>
+  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+const sendTeamInviteEmail = (to, { ownerName, businessName, inviteLink, expiresInDays = 7 }) => {
+  const inviter = escapeHtml(ownerName || "Your agency");
+  const agency = businessName ? ` (<span class="accent">${escapeHtml(businessName)}</span>)` : "";
+  const html = baseLayout({
+    title: "You're invited to join a team on ReviewQR",
+    content: `
+      <p><strong>${inviter}</strong>${agency} has invited you to join their agency team on <span class="accent">ReviewQR</span>.</p>
+      <p>As a team member you can create and manage Google Review QR codes for your clients using the agency's plan. You'll see only the QR codes you create.</p>
+      <div style="background:#f0fdf4;padding:16px 20px;border-radius:10px;margin:20px 0;color:#166534;font-size:14px;">
+        Sign in or create your account with <strong>${escapeHtml(to)}</strong> — the invite only works for this email address.
+      </div>
+    `,
+    button: { text: "Accept invitation", link: inviteLink },
+    footerText: `This invitation expires in ${expiresInDays} days. If you weren't expecting it, you can ignore this email.`,
+  });
+
+  return sendEmail({ to, subject: `${ownerName || "Your agency"} invited you to their ReviewQR team`, html });
+};
+
+const sendClientLoginEmail = (to, { clientName, agencyName, email, password, loginLink }) => {
+  const html = baseLayout({
+    title: "Your review dashboard login",
+    content: `
+      <p>Hi ${escapeHtml(clientName || "there")},</p>
+      <p><strong>${escapeHtml(agencyName)}</strong> has set up a dashboard where you can see how your Google Review QR codes are doing — scans, your Google rating and new reviews.</p>
+      <div style="background:#f0fdf4;padding:16px 20px;border-radius:10px;margin:20px 0;color:#166534;font-size:14px;line-height:1.8;">
+        <div>Email: <strong>${escapeHtml(email)}</strong></div>
+        <div>Password: <strong style="font-family:monospace;font-size:15px;">${escapeHtml(password)}</strong></div>
+      </div>
+      <p style="font-size:13px;color:#6b7280;">You can change this password after signing in.</p>
+    `,
+    button: { text: "Sign in to your dashboard", link: loginLink },
+    footerText: `This login was created for you by ${escapeHtml(agencyName)}. If you weren't expecting it, please contact them.`,
+  });
+
+  return sendEmail({ to, subject: `${agencyName} shared your review dashboard`, html });
+};
+
+const detailBox = (rows) => `
+  <div style="background:#f0fdf4;padding:16px 20px;border-radius:10px;margin:20px 0;color:#166534;font-size:14px;line-height:1.8;">
+    ${rows.filter(([, v]) => v).map(([k, v]) => `<div>${escapeHtml(k)}: <strong>${escapeHtml(v)}</strong></div>`).join("")}
+  </div>`;
+
+// ─── Agency owner: a client reported a payment ───────────────────────────────
+const sendPaymentClaimEmail = (to, { ownerName, clientName, businessName, amount, method, reference, paidAt, note, link }) => {
+  const html = baseLayout({
+    title: "A client says they've paid",
+    content: `
+      <p>Hi ${escapeHtml(ownerName || "there")},</p>
+      <p><strong>${escapeHtml(clientName)}</strong> reported a payment from their dashboard. Check that it reached your account, then confirm or reject it.</p>
+      ${detailBox([["Amount", amount], ["Location", businessName], ["Paid via", method], ["Reference", reference], ["Paid on", paidAt], ["Note", note]])}
+    `,
+    button: { text: "Review payment", link },
+    footerText: "The payment is added to the client's history only after you confirm it.",
+  });
+  return sendEmail({ to, subject: `${clientName} reported a payment of ${amount}`, html });
+};
+
+// ─── Agency owner: a team member added a client or QR ────────────────────────
+const sendTeamActivityEmail = (to, { ownerName, staffName, staffEmail, title, summary, details = [], link, linkText }) => {
+  const html = baseLayout({
+    title,
+    content: `
+      <p>Hi ${escapeHtml(ownerName || "there")},</p>
+      <p><strong>${escapeHtml(staffName)}</strong> (${escapeHtml(staffEmail)}) ${escapeHtml(summary)}</p>
+      ${detailBox(details)}
+    `,
+    button: link ? { text: linkText || "Open dashboard", link } : null,
+    footerText: "You get these emails because you own this agency account on ReviewQR.",
+  });
+  return sendEmail({ to, subject: `${staffName} ${summary.replace(/\.$/, "")}`, html });
+};
+
+// ─── Client: dashboard blocked for an overdue payment ────────────────────────
+const sendClientBlockedEmail = (to, { clientName, agencyName, amount, locations, days, link }) => {
+  const html = baseLayout({
+    title: "Your dashboard is paused: payment overdue",
+    content: `
+      <p>Hi ${escapeHtml(clientName || "there")},</p>
+      <p>A payment to <strong>${escapeHtml(agencyName)}</strong> has been overdue for more than ${days} days, so your review dashboard has been paused.</p>
+      ${detailBox([["Amount due", amount], ["For", locations]])}
+      <p>Sign in to see the payment options and tap <strong>"I've paid"</strong> once done. Your dashboard is restored as soon as ${escapeHtml(agencyName)} confirms the payment.</p>
+      <p style="font-size:13px;color:#6b7280;">Your Google review QR codes keep working for your customers in the meantime.</p>
+    `,
+    button: { text: "Pay now", link },
+    footerText: `Questions about this payment? Please contact ${escapeHtml(agencyName)}.`,
+  });
+  return sendEmail({ to, subject: `Payment overdue: ${amount} to ${agencyName}`, html });
+};
+
+// ─── Agency owner: a client was blocked ──────────────────────────────────────
+const sendAgencyClientBlockedEmail = (to, { ownerName, clientName, amount, locations, days, link }) => {
+  const html = baseLayout({
+    title: "Client dashboard blocked for non-payment",
+    content: `
+      <p>Hi ${escapeHtml(ownerName || "there")},</p>
+      <p><strong>${escapeHtml(clientName)}</strong> hasn't paid for more than ${days} days, so their client dashboard was blocked automatically. We've emailed them the amount due and how to pay.</p>
+      ${detailBox([["Amount overdue", amount], ["Locations", locations]])}
+      <p>It unblocks automatically when you record or confirm their payment (or move the due date forward). Their QR codes keep working.</p>
+    `,
+    button: { text: "View client", link },
+  });
+  return sendEmail({ to, subject: `${clientName} blocked: ${amount} overdue`, html });
+};
+
+// ─── QR codes paused after the plan grace period ─────────────────────────────
+const sendQrsPausedEmail = (to, { userName, count, link }) => {
+  const html = baseLayout({
+    title: `${count} QR code${count === 1 ? " is" : "s are"} now paused`,
+    content: `
+      <p>Hi ${escapeHtml(userName || "there")},</p>
+      <p>Your paid plan expired and wasn't renewed, so <strong>${count} QR code${count === 1 ? "" : "s"}</strong> over the Free plan limit
+      ${count === 1 ? "has" : "have"} been paused. Customers scanning ${count === 1 ? "it" : "them"} now see a "temporarily unavailable" page.</p>
+      <p>Your most-scanned QR code keeps working. Renew any time and every QR code starts working again straight away — nothing has been deleted.</p>
+    `,
+    button: { text: "Renew my plan", link },
+  });
+  return sendEmail({ to, subject: `${count} of your review QR codes ${count === 1 ? "is" : "are"} paused`, html });
+};
+
 export {
+  sendQrsPausedEmail,
+  sendPaymentClaimEmail,
+  sendTeamActivityEmail,
+  sendClientBlockedEmail,
+  sendAgencyClientBlockedEmail,
+  sendClientLoginEmail,
+  sendTeamInviteEmail,
   sendEmail,
   sendOtpEmail,
   sendWeeklyReportEmail,
