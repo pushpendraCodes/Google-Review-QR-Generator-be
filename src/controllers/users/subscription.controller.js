@@ -843,6 +843,12 @@ export const verifyLemonPayment = async (req, res) => {
                 checkoutId: already ? undefined : pendingTx.lemonSqueezyCheckoutId,
                 webhookVerified: false,
             });
+            if (!tx || String(tx.user) !== String(req.user._id)) {
+                return res.status(409).json({
+                    message: "We couldn't match this payment to your seat purchase. Please contact support with your order number.",
+                    success: false,
+                });
+            }
             return res.json({
                 message: alreadyCompleted ? "Seats already added." : "Payment verified. Seats added!",
                 success: true,

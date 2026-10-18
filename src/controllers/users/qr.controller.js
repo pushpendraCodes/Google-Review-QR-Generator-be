@@ -17,9 +17,26 @@ import { qrScope, invalidateQrCaches } from "../../services/team.service.js";
 import { notifyOwnerOfStaffAction } from "../../services/agencyNotify.service.js";
 import { shouldPauseExtraQrs, syncPlanPause } from "../../services/planGrace.service.js";
 
+import mongoose from "mongoose";
+
 const escapeHtml = (s = "") =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-import mongoose from "mongoose";
+
+/** False when the QR was stopped by its owner or paused because the plan lapsed. */
+const isQrServing = (qr, owner) => {
+  if (qr.isActive === false) return false;
+  return !(qr.planPaused && (!owner || shouldPauseExtraQrs(owner)));
+};
+
+/** Logos are only ever hosted on our Cloudinary account; never store arbitrary URLs. */
+const isUploadedLogoUrl = (value) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "res.cloudinary.com";
+  } catch {
+    return false;
+  }
+};
 
 // ─── Generate QR ──────────────────────────────────────────────────────────────
 // POST /api/qr/generate
@@ -84,8 +101,8 @@ export const generateQR = async (req, res) => {
       });
     }
 
-    if (!existing) {
-      // ── NEW QR: check plan limit ─────────────────────────────────────────────
+    if (!existing || reviving) {
+      // ── NEW or revived QR: check plan limit ──────────────────────────────────
       const qrLimit = QR_LIMITS[plan] ?? 1;
       const currentCount = await QRCode.countDocuments({ owner: account._id, status: "active" });
 
@@ -127,8 +144,11 @@ export const generateQR = async (req, res) => {
         console.error("Logo upload failed, continuing without logo:", err.message);
         // Non-fatal — proceed without logo
       }
-    } else if (logoData && typeof logoData === 'string' && logoData.startsWith('http')) {
-      // If logoData is already a URL, keep it
+    } else if (
+      typeof logoData === "string" &&
+      canUseFeature(plan, "logo") &&
+      (logoData === existing?.qrConfig?.logoUrl || isUploadedLogoUrl(logoData))
+    ) {
       qrConfig.logoUrl = logoData;
     }
 
@@ -263,7 +283,9 @@ export const checkUserPlan = async (req, res) => {
 // `member` is only honoured for account owners (staff always see just their own QRs).
 export const listQRCodes = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search } = req.query;
+    const { search } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const member = req.isStaff ? "" : String(req.query.member || "");
     const userId = req.user._id.toString();
     const cacheKey = `qr:list:${userId}:${page}:${limit}:${search || ""}:${member}`;
@@ -280,26 +302,34 @@ export const listQRCodes = async (req, res) => {
     }
 
     if (search) {
+      const pattern = String(search).slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       query.$or = [
-        { businessName: { $regex: search, $options: "i" } },
-        { label: { $regex: search, $options: "i" } },
+        { businessName: { $regex: pattern, $options: "i" } },
+        { label: { $regex: pattern, $options: "i" } },
       ];
     }
 
-    const [qrCodes, total] = await Promise.all([
+    const accountActive = { owner: req.account._id, status: "active" };
+    const [qrCodes, total, accountTotal, accountPaused] = await Promise.all([
       QRCode.find(query)
         .populate("createdBy", "name email picture")
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
-        .limit(Number(limit)),
+        .limit(limit),
       QRCode.countDocuments(query),
+      req.isStaff ? null : QRCode.countDocuments(accountActive),
+      req.isStaff ? null : QRCode.countDocuments({ ...accountActive, planPaused: true }),
     ]);
 
     const result = {
       qrCodes,
+      total,
+      // Whole-account counts (owners only), independent of page / member filter.
+      accountTotal,
+      accountPaused,
       pagination: {
         total,
-        page: Number(page),
+        page,
         pages: Math.ceil(total / limit),
       },
     };
@@ -342,7 +372,6 @@ export const updateQRCode = async (req, res) => {
     const {
       label,
       isActive,
-      agencyBilling,
       // qrConfig fields
       color, shape, logoData,
       // standeeConfig fields
@@ -397,18 +426,13 @@ export const updateQRCode = async (req, res) => {
       qr.standeeConfig.whiteLabel = whiteLabel;
     }
 
-    // ── Agency Billing (Agency Plan Only) ─────────────────────────────────────
-    if (agencyBilling !== undefined && plan === "agency") {
-      qr.agencyBilling = {
-        ...qr.agencyBilling,
-        ...agencyBilling,
-        history: agencyBilling.history !== undefined ? agencyBilling.history : qr.agencyBilling.history
-      };
-    }
-
     await qr.save();
 
-    await invalidateQrCaches(req, { qrId: qr._id, createdBy: qr.createdBy });
+    await Promise.all([
+      invalidateQrCaches(req, { qrId: qr._id, createdBy: qr.createdBy }),
+      delCache(`qr:scan:${qr.shortCode}`),
+      delCache(`qr:landing:${qr.shortCode}`),
+    ]);
 
     return res.json({ success: true, message: "QR code updated.", qr });
 
@@ -502,7 +526,7 @@ export const scanRedirect = async (req, res) => {
 
     if (qr.isActive === false) {
       const owner = await User.findById(qr.owner).select("name").lean();
-      const ownerName = owner ? owner.name : "the owner";
+      const ownerName = escapeHtml(owner ? owner.name : "the owner");
       return res.status(403).send(`
         <html>
           <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
@@ -593,8 +617,9 @@ export const getLandingData = async (req, res) => {
     if (!qr) return res.status(404).json({ message: "QR code not found." });
 
     const owner = await User.findById(qr.owner)
-      .select("plan planExpiresAt businessName businessType")
+      .select("plan planExpiresAt planLapsedAt teamOwner businessName businessType")
       .lean();
+    if (!isQrServing(qr, owner)) return res.status(404).json({ message: "QR code not found." });
 
     const result = {
       success: true,
@@ -629,8 +654,9 @@ export const generateAIReviews = async (req, res) => {
 
     // Verify QR owner has active paid plan
     const owner = await User.findById(qr.owner)
-      .select("plan planExpiresAt businessType")
+      .select("plan planExpiresAt planLapsedAt teamOwner businessType")
       .lean();
+    if (!isQrServing(qr, owner)) return res.status(404).json({ message: "QR code not found." });
 
     if (!hasActivePaidPlan(owner)) {
       return res.status(403).json({

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import GoogleBusinessConnection from "../../models/GoogleBusinessConnection.js";
 import GbpReview from "../../models/GbpReview.js";
@@ -40,14 +41,27 @@ function connectionPayload(connection) {
   };
 }
 
+// The OAuth state is only honoured in the browser that requested it (nonce cookie), so a
+// connect link can't be handed to someone else to attach their Google account to ours.
+const OAUTH_NONCE_COOKIE = "gbp_oauth_nonce";
+const OAUTH_NONCE_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+  path: "/api/gbp",
+};
+const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
 // GET /api/gbp/connect-url
 export const getConnectUrl = async (req, res) => {
   try {
+    const nonce = crypto.randomBytes(32).toString("hex");
     const state = jwt.sign(
-      { id: req.user._id.toString(), purpose: "gbp" },
+      { id: req.user._id.toString(), purpose: "gbp", nonce: sha256(nonce) },
       process.env.ACCESS_TOKEN_SECRET,
       { expiresIn: "15m" }
     );
+    res.cookie(OAUTH_NONCE_COOKIE, nonce, { ...OAUTH_NONCE_COOKIE_OPTIONS, maxAge: 15 * 60 * 1000 });
     const url = buildGbpAuthUrl(state);
     res.json({ success: true, url });
   } catch (err) {
@@ -76,6 +90,14 @@ export const oauthCallback = async (req, res) => {
       return fail("OAuth session expired. Please try connecting again.");
     }
     if (decoded.purpose !== "gbp") return fail("Invalid OAuth state.");
+
+    const nonce = req.cookies?.[OAUTH_NONCE_COOKIE];
+    res.clearCookie(OAUTH_NONCE_COOKIE, OAUTH_NONCE_COOKIE_OPTIONS);
+    const expected = Buffer.from(String(decoded.nonce || ""));
+    const actual = Buffer.from(nonce ? sha256(nonce) : "");
+    if (!nonce || expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+      return fail("Please start the connection from your ReviewQR dashboard in this browser.");
+    }
 
     const tokens = await exchangeGbpCode(code);
     await saveConnectionTokens(decoded.id, tokens);

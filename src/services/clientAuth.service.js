@@ -9,6 +9,10 @@ const CLIENT_TOKEN_TTL = "7d";
 const clientSecret = () =>
   process.env.CLIENT_TOKEN_SECRET || `${process.env.ACCESS_TOKEN_SECRET}:client-portal`;
 
+if (process.env.NODE_ENV === "production" && !process.env.CLIENT_TOKEN_SECRET) {
+  console.warn("CLIENT_TOKEN_SECRET is not set; client portal tokens fall back to a secret derived from ACCESS_TOKEN_SECRET.");
+}
+
 export const signClientToken = (client) =>
   jwt.sign({ cid: String(client._id), v: client.tokenVersion || 0, typ: "client" }, clientSecret(), {
     expiresIn: CLIENT_TOKEN_TTL,

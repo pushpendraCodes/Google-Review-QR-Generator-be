@@ -9,7 +9,7 @@ import PaymentClaim from "../../models/PaymentClaim.js";
 import AgencyPaymentSettings from "../../models/AgencyPaymentSettings.js";
 import { hasActivePaidPlan, teamBaseSeats, teamMaxExtraSeats } from "../../utils/helpers.js";
 import { delCache } from "../../utils/cache.js";
-import { syncPlanPause } from "../../services/planGrace.service.js";
+import { planLapsedAt as lapsedAtOf, syncPlanPause } from "../../services/planGrace.service.js";
 import { billingBlock } from "../../services/clientBilling.service.js";
 
 const PLANS = ["free", "starter", "pro", "agency"];
@@ -345,6 +345,17 @@ export const updateUserPlan = async (req, res) => {
       }
     }
 
+    const previous = await User.findById(req.params.id).select("plan planExpiresAt planLapsedAt").lean();
+    if (!previous) return res.status(404).json({ message: "User not found" });
+
+    // Downgrading a paid account starts the same grace period as an unrenewed plan.
+    const graceFields =
+      plan !== "free"
+        ? { planLapsedAt: null, qrPauseNotifSent: false }
+        : previous.plan !== "free"
+          ? { planLapsedAt: lapsedAtOf(previous) || new Date(), qrPauseNotifSent: false }
+          : {};
+
     const user = await User.findByIdAndUpdate(
       req.params.id,
       {
@@ -352,7 +363,7 @@ export const updateUserPlan = async (req, res) => {
         planExpiresAt: expiry,
         planExpiryWarningSent: false,
         planExpiredNotifSent: false,
-        ...(plan !== "free" ? { planLapsedAt: null, qrPauseNotifSent: false } : {}),
+        ...graceFields,
       },
       { new: true, select: USER_SAFE_FIELDS }
     );
@@ -364,7 +375,7 @@ export const updateUserPlan = async (req, res) => {
       delCache(`sub:history:${id}`),
       delCache(`user:profile:${id}`),
     ]);
-    if (plan !== "free") await syncPlanPause(user._id).catch((err) => console.error("Resume paused QRs failed:", err.message));
+    await syncPlanPause(user._id).catch((err) => console.error("Plan pause sync failed:", err.message));
 
     return res.json({ message: "Plan updated", user });
   } catch (err) {
@@ -430,6 +441,7 @@ export const deleteUser = async (req, res) => {
     await ClientAccount.deleteMany({ agency: user._id });
     await PaymentClaim.deleteMany({ agency: user._id });
     await AgencyPaymentSettings.deleteOne({ agency: user._id });
+    await TeamInvite.deleteMany({ owner: user._id });
     await user.deleteOne();
 
     return res.json({ message: "User and all associated QR codes deleted successfully" });
