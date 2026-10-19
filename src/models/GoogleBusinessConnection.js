@@ -38,8 +38,6 @@ const googleBusinessConnectionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-googleBusinessConnectionSchema.index({ owner: 1 });
-
 export default mongoose.model(
   "GoogleBusinessConnection",
   googleBusinessConnectionSchema

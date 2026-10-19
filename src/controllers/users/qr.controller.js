@@ -15,18 +15,28 @@ import { generateReviewSuggestions } from "../../services/ai.service.js";
 import { refreshQrFromGoogle } from "../../services/googleSync.service.js";
 import { qrScope, invalidateQrCaches } from "../../services/team.service.js";
 import { notifyOwnerOfStaffAction } from "../../services/agencyNotify.service.js";
-import { shouldPauseExtraQrs, syncPlanPause } from "../../services/planGrace.service.js";
+import { STOP_FIELDS, isQrPaused, planGraceInfo, qrStopBlock, startFreeTrialIfNeeded, syncPlanPause } from "../../services/planGrace.service.js";
 
 import mongoose from "mongoose";
 
 const escapeHtml = (s = "") =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-/** False when the QR was stopped by its owner or paused because the plan lapsed. */
-const isQrServing = (qr, owner) => {
-  if (qr.isActive === false) return false;
-  return !(qr.planPaused && (!owner || shouldPauseExtraQrs(owner)));
-};
+/** False when the QR was stopped by its owner, or its Free period / plan grace is over. */
+const isQrServing = (qr, owner) => qr.isActive !== false && !isQrPaused(qr, owner);
+
+const pausedQrPage = (businessName) => `
+        <html>
+          <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Temporarily unavailable</title></head>
+          <body style="font-family: sans-serif; text-align: center; padding: 2rem; background: #f9f9f9;">
+            <div style="background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 400px; margin: 2rem auto;">
+              <h2 style="color: #b45309; margin-top: 0;">Temporarily unavailable</h2>
+              <p style="color: #555; line-height: 1.5;">The review link for <strong>${escapeHtml(businessName || "this business")}</strong> is paused right now.</p>
+              <p style="color: #555; line-height: 1.5;">Please let the staff know, or try again later.</p>
+            </div>
+          </body>
+        </html>
+      `;
 
 /** Logos are only ever hosted on our Cloudinary account; never store arbitrary URLs. */
 const isUploadedLogoUrl = (value) => {
@@ -100,6 +110,9 @@ export const generateQR = async (req, res) => {
         message: "This business already has a QR code in your agency account. Ask your agency owner if you need access to it.",
       });
     }
+
+    const stopBlock = req.isStaff ? null : qrStopBlock(account, existing);
+    if (stopBlock) return res.status(403).json({ success: false, ...stopBlock });
 
     if (!existing || reviving) {
       // ── NEW or revived QR: check plan limit ──────────────────────────────────
@@ -208,6 +221,11 @@ export const generateQR = async (req, res) => {
       console.error("Google sync on generate failed:", err.message);
     }
 
+    if (!req.isStaff && (!existing || reviving)) {
+      await startFreeTrialIfNeeded(account);
+      await syncPlanPause(account._id);
+    }
+
     // ── Invalidate caches ──────────────────────────────────────────────────────
     await invalidateQrCaches(req, { qrId: qr._id, createdBy: existing?.createdBy });
 
@@ -253,6 +271,9 @@ export const checkUserPlan = async (req, res) => {
   try {
 
     const plan = req.account.plan;
+
+    const stopBlock = req.isStaff ? null : qrStopBlock(req.account);
+    if (stopBlock) return res.status(403).json({ success: false, ...stopBlock });
 
     // ── Plan limits check (limits are per account, shared by the whole team) ──
     const qrLimit = QR_LIMITS[plan] ?? 1;
@@ -327,6 +348,7 @@ export const listQRCodes = async (req, res) => {
       // Whole-account counts (owners only), independent of page / member filter.
       accountTotal,
       accountPaused,
+      qrStop: req.isStaff ? null : planGraceInfo(req.account),
       pagination: {
         total,
         page,
@@ -475,6 +497,9 @@ export const downloadQRCode = async (req, res) => {
       return res.status(403).json({ message: "SVG/PDF download requires a paid plan." });
     }
 
+    const stopBlock = req.isStaff ? null : qrStopBlock(req.account, qr);
+    if (stopBlock) return res.status(403).json(stopBlock);
+
     // Printed QRs must always hit /r/ so scanRedirect can choose the destination
     // by the owner's current plan (upgrades/downgrades apply to already-printed QRs).
     const encodeUrl = `${process.env.BACKEND_URL || process.env.FRONTEND_URL}/r/${qr.shortCode}`;
@@ -541,27 +566,13 @@ export const scanRedirect = async (req, res) => {
       `);
     }
 
-    if (qr.planPaused) {
-      const owner = await User.findById(qr.owner).select("name businessName plan planExpiresAt planLapsedAt teamOwner").lean();
-      if (owner && !shouldPauseExtraQrs(owner)) {
-        // Renewed since the pause: resume right away instead of waiting for the hourly job
-        syncPlanPause(owner).catch((err) => console.error("Plan pause sync failed:", err.message));
-      } else {
-        const name = escapeHtml(qr.businessName || "this business");
-        return res.status(503).send(`
-        <html>
-          <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Temporarily unavailable</title></head>
-          <body style="font-family: sans-serif; text-align: center; padding: 2rem; background: #f9f9f9;">
-            <div style="background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 400px; margin: 2rem auto;">
-              <h2 style="color: #b45309; margin-top: 0;">Temporarily unavailable</h2>
-              <p style="color: #555; line-height: 1.5;">The review link for <strong>${name}</strong> is paused right now.</p>
-              <p style="color: #555; line-height: 1.5;">Please let the staff know, or try again later.</p>
-            </div>
-          </body>
-        </html>
-      `);
-      }
+    const owner = await User.findById(qr.owner).select(STOP_FIELDS).lean();
+    const stopped = isQrPaused(qr, owner);
+    if (owner && stopped !== Boolean(qr.planPaused)) {
+      // Stop date passed or plan renewed since the last hourly sync: apply it now
+      syncPlanPause(owner).catch((err) => console.error("Plan pause sync failed:", err.message));
     }
+    if (stopped) return res.status(503).send(pausedQrPage(qr.businessName));
 
     // Increment scan count (fire-and-forget)
     QRCode.findByIdAndUpdate(qr._id, { $inc: { scanCount: 1 } }).exec();
@@ -587,8 +598,6 @@ export const scanRedirect = async (req, res) => {
     await ScanLog.create({ qrCode: qr._id, userAgent, ip: hashedIp, city, country });
 
     // ── Smart redirect: active paid plan → landing page, else → Google Review ──
-    const owner = await User.findById(qr.owner).select("plan planExpiresAt").lean();
-
     if (hasActivePaidPlan(owner)) {
       // Redirect to branded landing page with AI review suggestions
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
@@ -617,7 +626,7 @@ export const getLandingData = async (req, res) => {
     if (!qr) return res.status(404).json({ message: "QR code not found." });
 
     const owner = await User.findById(qr.owner)
-      .select("plan planExpiresAt planLapsedAt teamOwner businessName businessType")
+      .select(`${STOP_FIELDS} businessName businessType`)
       .lean();
     if (!isQrServing(qr, owner)) return res.status(404).json({ message: "QR code not found." });
 
@@ -654,7 +663,7 @@ export const generateAIReviews = async (req, res) => {
 
     // Verify QR owner has active paid plan
     const owner = await User.findById(qr.owner)
-      .select("plan planExpiresAt planLapsedAt teamOwner businessType")
+      .select(`${STOP_FIELDS} businessType`)
       .lean();
     if (!isQrServing(qr, owner)) return res.status(404).json({ message: "QR code not found." });
 

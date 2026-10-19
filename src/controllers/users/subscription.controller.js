@@ -62,6 +62,8 @@ const activateUserPlan = async (tx) => {
         planExpiredNotifSent: false,
         planLapsedAt: null,
         qrPauseNotifSent: false,
+        qrStopWarningSent: false,
+        freeQrStopAt: null,
     };
     // Agency renewals carry the seats that were paid for; other plans have no team.
     if (tx.plan !== "agency") update.extraSeats = 0;

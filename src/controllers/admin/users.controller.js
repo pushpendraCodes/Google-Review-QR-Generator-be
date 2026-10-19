@@ -9,7 +9,7 @@ import PaymentClaim from "../../models/PaymentClaim.js";
 import AgencyPaymentSettings from "../../models/AgencyPaymentSettings.js";
 import { hasActivePaidPlan, teamBaseSeats, teamMaxExtraSeats } from "../../utils/helpers.js";
 import { delCache } from "../../utils/cache.js";
-import { planLapsedAt as lapsedAtOf, syncPlanPause } from "../../services/planGrace.service.js";
+import { lapseStopDate, planLapsedAt as lapsedAtOf, syncPlanPause } from "../../services/planGrace.service.js";
 import { billingBlock } from "../../services/clientBilling.service.js";
 
 const PLANS = ["free", "starter", "pro", "agency"];
@@ -349,11 +349,12 @@ export const updateUserPlan = async (req, res) => {
     if (!previous) return res.status(404).json({ message: "User not found" });
 
     // Downgrading a paid account starts the same grace period as an unrenewed plan.
+    const lapsedAt = lapsedAtOf(previous) || new Date();
     const graceFields =
       plan !== "free"
-        ? { planLapsedAt: null, qrPauseNotifSent: false }
+        ? { planLapsedAt: null, freeQrStopAt: null, qrPauseNotifSent: false, qrStopWarningSent: false }
         : previous.plan !== "free"
-          ? { planLapsedAt: lapsedAtOf(previous) || new Date(), qrPauseNotifSent: false }
+          ? { planLapsedAt: lapsedAt, freeQrStopAt: lapseStopDate(lapsedAt), qrPauseNotifSent: false, qrStopWarningSent: false }
           : {};
 
     const user = await User.findByIdAndUpdate(

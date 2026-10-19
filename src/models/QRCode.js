@@ -99,6 +99,5 @@ qrCodeSchema.virtual("shortURL").get(function () {
 qrCodeSchema.index({ owner: 1, placeId: 1 }, { unique: true });
 qrCodeSchema.index({ owner: 1, status: 1 });
 qrCodeSchema.index({ owner: 1, createdBy: 1, status: 1 });
-qrCodeSchema.index({ shortCode: 1 });
 
 export default mongoose.model("QRCode", qrCodeSchema);

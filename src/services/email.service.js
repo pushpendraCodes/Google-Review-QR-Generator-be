@@ -303,8 +303,8 @@ const sendPlanExpiringEmail = (to, { userName, plan, expiresAt, graceDays = 15 }
       <div style="background: #fef3cd; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #f59e0b;">
         <p style="margin: 0; font-size: 15px; color: #92400e;">
           <strong>What happens after expiry?</strong><br/>
-          Customers will be redirected straight to your Google review page without the branded landing page and AI review suggestions.
-          The Free plan includes 1 QR code: if you have more, the extra ones stop working ${graceDays} days after expiry until you renew.
+          Your QR codes keep working for ${graceDays} days, without the branded landing page and AI review suggestions.
+          After that, every QR code stops working until you renew.
         </p>
       </div>
       <p>Renew now to keep enjoying:</p>
@@ -330,7 +330,7 @@ const sendPlanExpiringEmail = (to, { userName, plan, expiresAt, graceDays = 15 }
 };
 
 // ─── Plan Expired ────────────────────────────────────────────────────────────
-const sendPlanExpiredEmail = (to, { userName, plan, pauseOn = null, extraQrs = 0 }) => {
+const sendPlanExpiredEmail = (to, { userName, plan, pauseOn = null, qrCount = 0 }) => {
   const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
   const pauseDate = pauseOn
     ? new Date(pauseOn).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
@@ -340,20 +340,15 @@ const sendPlanExpiredEmail = (to, { userName, plan, pauseOn = null, extraQrs = 0
     title: `Your ${planLabel} plan has expired`,
     content: `
       <p>Hi ${userName}, your <span class="accent">${planLabel}</span> subscription has ended.</p>
-      ${extraQrs > 0 && pauseDate
+      ${qrCount > 0 && pauseDate
         ? `<div style="background: #fef2f2; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #dc2626;">
         <p style="margin: 0; font-size: 15px; color: #991b1b;">
-          <strong>${extraQrs} of your QR codes will stop working on ${pauseDate}.</strong><br/>
-          The Free plan includes 1 QR code. Your most-scanned QR keeps working; the others are paused on that date until you renew.
-          Customers scanning a paused QR see a "temporarily unavailable" page.
+          <strong>Your QR code${qrCount === 1 ? "" : "s"} will stop working on ${pauseDate}.</strong><br/>
+          Until then, customers scanning ${qrCount === 1 ? "it" : "them"} go straight to your Google review page.
+          After that date they see a "temporarily unavailable" page until you renew. Nothing is deleted.
         </p>
       </div>`
-        : `<div style="background: #f0fdf4; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #1D9E75;">
-        <p style="margin: 0; font-size: 15px; color: #166534;">
-          <strong>Your QR code still works.</strong><br/>
-          Customers scanning it will be redirected directly to your Google review page.
-        </p>
-      </div>`}
+        : ""}
       <p>However, you're now missing out on:</p>
       <div style="display: flex; flex-direction: column; gap: 10px; margin: 20px 0;">
         <div style="background: #fef2f2; padding: 12px 16px; border-radius: 8px; font-size: 14px; color: #991b1b;">
@@ -372,9 +367,9 @@ const sendPlanExpiredEmail = (to, { userName, plan, pauseOn = null, extraQrs = 0
       text: "Resubscribe Now",
       link: `${process.env.FRONTEND_URL}/pricing`,
     },
-    footerText: extraQrs > 0 && pauseDate
-      ? `Renew before ${pauseDate} to keep all your QR codes working.`
-      : "Your QR code continues to work and redirects directly to Google Reviews.",
+    footerText: pauseDate
+      ? `Renew before ${pauseDate} to keep your QR codes working.`
+      : "Renew any time to restore all premium features.",
   });
 
   return sendEmail({
@@ -494,23 +489,54 @@ const sendAgencyClientBlockedEmail = (to, { ownerName, clientName, amount, locat
   return sendEmail({ to, subject: `${clientName} blocked: ${amount} overdue`, html });
 };
 
-// ─── QR codes paused after the plan grace period ─────────────────────────────
-const sendQrsPausedEmail = (to, { userName, count, link }) => {
+const qrStopReason = (reason, days) =>
+  reason === "lapsed"
+    ? `your paid plan expired and the ${days}-day grace period has ended`
+    : `your ${days}-day free period has ended`;
+
+// ─── QR codes will stop soon (Free period / plan grace ending) ───────────────
+const sendQrsStoppingEmail = (to, { userName, count, stopOn, reason, days, link }) => {
+  const date = new Date(stopOn).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+  const its = count === 1 ? "Your QR code" : `Your ${count} QR codes`;
   const html = baseLayout({
-    title: `${count} QR code${count === 1 ? " is" : "s are"} now paused`,
+    title: `${its} stop${count === 1 ? "s" : ""} working on ${date}`,
     content: `
       <p>Hi ${escapeHtml(userName || "there")},</p>
-      <p>Your paid plan expired and wasn't renewed, so <strong>${count} QR code${count === 1 ? "" : "s"}</strong> over the Free plan limit
-      ${count === 1 ? "has" : "have"} been paused. Customers scanning ${count === 1 ? "it" : "them"} now see a "temporarily unavailable" page.</p>
-      <p>Your most-scanned QR code keeps working. Renew any time and every QR code starts working again straight away — nothing has been deleted.</p>
+      <p>${reason === "lapsed"
+        ? `Your paid plan has expired. Your QR codes have kept working during the ${days}-day grace period, which ends on <strong>${date}</strong>.`
+        : `Your ${days}-day free period ends on <strong>${date}</strong>.`}</p>
+      <div style="background: #fef3cd; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+        <p style="margin: 0; font-size: 15px; color: #92400e;">
+          <strong>After that date, ${count === 1 ? "your QR code stops" : "all your QR codes stop"} working.</strong><br/>
+          Customers who scan ${count === 1 ? "it" : "them"} will see a "temporarily unavailable" page instead of your Google review form.
+        </p>
+      </div>
+      <p>Choose a paid plan before then to keep collecting reviews without interruption. Your printed QR codes and standees stay the same — nothing needs to be reprinted.</p>
     `,
-    button: { text: "Renew my plan", link },
+    button: { text: reason === "lapsed" ? "Renew my plan" : "Upgrade now", link },
+    footerText: "If you upgrade after the date, your QR codes start working again straight away.",
   });
-  return sendEmail({ to, subject: `${count} of your review QR codes ${count === 1 ? "is" : "are"} paused`, html });
+  return sendEmail({ to, subject: `⚠️ ${its} stop${count === 1 ? "s" : ""} working on ${date}`, html });
+};
+
+// ─── QR codes paused (Free period / plan grace ended) ────────────────────────
+const sendQrsPausedEmail = (to, { userName, count, reason, days, link }) => {
+  const html = baseLayout({
+    title: `${count === 1 ? "Your QR code is" : `Your ${count} QR codes are`} now paused`,
+    content: `
+      <p>Hi ${escapeHtml(userName || "there")},</p>
+      <p>Because ${qrStopReason(reason, days)}, ${count === 1 ? "your QR code has" : `all ${count} of your QR codes have`} been paused.
+      Customers scanning ${count === 1 ? "it" : "them"} now see a "temporarily unavailable" page.</p>
+      <p>${reason === "lapsed" ? "Renew" : "Upgrade"} any time and ${count === 1 ? "it starts" : "they start"} working again straight away. Nothing has been deleted, and you don't need to reprint anything.</p>
+    `,
+    button: { text: reason === "lapsed" ? "Renew my plan" : "Upgrade now", link },
+  });
+  return sendEmail({ to, subject: `Your review QR code${count === 1 ? " is" : "s are"} paused`, html });
 };
 
 export {
   sendQrsPausedEmail,
+  sendQrsStoppingEmail,
   sendPaymentClaimEmail,
   sendTeamActivityEmail,
   sendClientBlockedEmail,

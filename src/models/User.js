@@ -52,8 +52,12 @@ const userSchema = new mongoose.Schema(
     // Plan expiry notification tracking
     planExpiryWarningSent: { type: Boolean, default: false },
     planExpiredNotifSent: { type: Boolean, default: false },
-    // When a paid plan ran out without renewal. QRs over the Free limit pause after the grace period.
+    // When a paid plan ran out without renewal.
     planLapsedAt: { type: Date, default: null },
+    // While not on a paid plan, every QR in the account pauses at this date
+    // (Free period from the first QR, or the grace period after a plan lapses).
+    freeQrStopAt: { type: Date, default: null },
+    qrStopWarningSent: { type: Boolean, default: false },
     qrPauseNotifSent: { type: Boolean, default: false },
   },
   { timestamps: true }
