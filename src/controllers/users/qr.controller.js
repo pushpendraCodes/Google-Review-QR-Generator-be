@@ -4,14 +4,22 @@ import DailyMetric from "../../models/DailyMetric.js";
 import User from "../../models/User.js";
 import { generateQRPng, generateQRSvg, generateQRPdf } from "../../services/qr.service.js";
 import { uploadToB2 } from "../../services/b2.service.js";
-import { buildReviewUrl } from "../../services/places.service.js";
+import { buildReviewUrl, getPlaceDetails } from "../../services/places.service.js";
 import { dataURLtoBuffer, generateShortCode, QR_LIMITS, canUseFeature, hasActivePaidPlan } from "../../utils/helpers.js";
 import { getCache, setCache, delCache, invalidatePattern } from "../../utils/cache.js";
 import axios from "axios";
 import { deleteFromCloudinary, uploadToCloudinary } from "../../services/cloudinary.service.js";
 import QRDownload from "../../models/QRDownload.js";
 import { sendQrTipsEmail } from "../../services/email.service.js";
-import { generateReviewSuggestions } from "../../services/ai.service.js";
+import { generateReviewSuggestions, generatePersonalisedReviews, draftReviewProfile } from "../../services/ai.service.js";
+import {
+  DEFAULT_LIKED,
+  PROFILE_LIMITS,
+  buildQuestions,
+  profileEnabled,
+  sanitizeProfile,
+  validateAnswers,
+} from "../../services/reviewProfile.service.js";
 import { refreshQrFromGoogle } from "../../services/googleSync.service.js";
 import { qrScope, invalidateQrCaches } from "../../services/team.service.js";
 import { notifyOwnerOfStaffAction } from "../../services/agencyNotify.service.js";
@@ -21,6 +29,8 @@ import mongoose from "mongoose";
 
 const escapeHtml = (s = "") =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+const RECENT_REVIEWS_KEPT = 15;
 
 /** False when the QR was stopped by its owner, or its Free period / plan grace is over. */
 const isQrServing = (qr, owner) => qr.isActive !== false && !isQrPaused(qr, owner);
@@ -639,6 +649,7 @@ export const getLandingData = async (req, res) => {
       reviewUrl: qr.reviewUrl,
       placeAddress: qr.placeAddress,
       aiEnabled: hasActivePaidPlan(owner),
+      questions: profileEnabled(owner, qr.reviewProfile) ? buildQuestions(qr.reviewProfile) : null,
     };
 
     // Cache for 5 minutes
@@ -652,11 +663,13 @@ export const getLandingData = async (req, res) => {
 };
 
 // ─── AI review generation (public, rate-limited) ──────────────────────────────
-// POST /api/qr/ai-reviews  body: { shortCode }
+// POST /api/qr/ai-reviews  body: { shortCode, answers?: { services, liked, staff, language } }
 export const generateAIReviews = async (req, res) => {
   try {
-    const { shortCode } = req.body;
-    if (!shortCode) return res.status(400).json({ message: "shortCode is required." });
+    const { shortCode, answers } = req.body;
+    if (!shortCode || typeof shortCode !== "string") {
+      return res.status(400).json({ message: "shortCode is required." });
+    }
 
     const qr = await QRCode.findOne({ shortCode, status: "active" }).lean();
     if (!qr) return res.status(404).json({ message: "QR code not found." });
@@ -673,16 +686,128 @@ export const generateAIReviews = async (req, res) => {
       });
     }
 
-    const reviews = await generateReviewSuggestions({
+    if (!profileEnabled(owner, qr.reviewProfile)) {
+      const reviews = await generateReviewSuggestions({
+        businessName: qr.businessName,
+        businessType: owner.businessType || "",
+        rating: qr.placeRating,
+      });
+      return res.json({ success: true, reviews, personalised: false });
+    }
+
+    const recentKey = `ai:recent:${qr._id}`;
+    const cachedRecent = await getCache(recentKey);
+    const recent = Array.isArray(cachedRecent) ? cachedRecent : [];
+    const reviews = await generatePersonalisedReviews({
       businessName: qr.businessName,
       businessType: owner.businessType || "",
-      rating: qr.placeRating,
+      profile: qr.reviewProfile,
+      answers: validateAnswers(qr.reviewProfile, answers && typeof answers === "object" ? answers : {}),
+      recent: recent.slice(0, 6),
     });
+    await setCache(recentKey, [...reviews, ...recent].slice(0, RECENT_REVIEWS_KEPT), 7 * 24 * 3600);
 
-    res.json({ success: true, reviews });
+    res.json({ success: true, reviews, personalised: true });
   } catch (err) {
     console.error("AI review generation error:", err.message);
     res.status(500).json({ message: "Failed to generate review suggestions." });
+  }
+};
+
+// ─── AI review profile (owner, Pro/Agency) ────────────────────────────────────
+const profileGate = (req, res) => {
+  if (canUseFeature(req.account?.plan, "aiProfile") && hasActivePaidPlan(req.account)) return true;
+  res.status(403).json({
+    code: "plan_required",
+    message: "Personalised AI reviews are available on the Pro and Agency plans.",
+  });
+  return false;
+};
+
+const findScopedQr = async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    res.status(404).json({ message: "QR code not found." });
+    return null;
+  }
+  const qr = await QRCode.findOne({ _id: req.params.id, ...qrScope(req) });
+  if (!qr) res.status(404).json({ message: "QR code not found." });
+  return qr;
+};
+
+const profilePayload = (qr) => ({
+  success: true,
+  qr: { _id: qr._id, businessName: qr.businessName, placeAddress: qr.placeAddress, shortCode: qr.shortCode },
+  profile: sanitizeProfile(qr.reviewProfile || {}),
+  updatedAt: qr.reviewProfile?.updatedAt || null,
+  limits: PROFILE_LIMITS,
+  defaultLiked: DEFAULT_LIKED,
+});
+
+// GET /api/qr/:id/review-profile
+export const getReviewProfile = async (req, res) => {
+  try {
+    const qr = await findScopedQr(req, res);
+    if (!qr) return;
+    res.json({ ...profilePayload(qr), allowed: canUseFeature(req.account?.plan, "aiProfile") });
+  } catch (err) {
+    console.error("Get review profile error:", err.message);
+    res.status(500).json({ message: "Failed to load AI review profile." });
+  }
+};
+
+// PUT /api/qr/:id/review-profile
+export const updateReviewProfile = async (req, res) => {
+  try {
+    if (!profileGate(req, res)) return;
+    const qr = await findScopedQr(req, res);
+    if (!qr) return;
+
+    qr.reviewProfile = { ...sanitizeProfile(req.body || {}), updatedAt: new Date() };
+    await qr.save();
+    await Promise.all([
+      delCache(`qr:landing:${qr.shortCode}`),
+      delCache(`ai:recent:${qr._id}`),
+    ]);
+
+    res.json({ ...profilePayload(qr), allowed: true, message: "AI review profile saved." });
+  } catch (err) {
+    console.error("Update review profile error:", err.message);
+    res.status(500).json({ message: "Failed to save AI review profile." });
+  }
+};
+
+// POST /api/qr/:id/review-profile/autofill — AI draft from Google data; not saved
+export const autofillReviewProfile = async (req, res) => {
+  try {
+    if (!profileGate(req, res)) return;
+    const qr = await findScopedQr(req, res);
+    if (!qr) return;
+
+    let details = null;
+    if (qr.placeId) {
+      try {
+        details = await getPlaceDetails(qr.placeId);
+      } catch (err) {
+        console.error("Autofill place details failed:", err.message);
+      }
+    }
+
+    const reviews = (details?.reviews?.length ? details.reviews : qr.latestReviews || [])
+      .filter((r) => (r.rating || 0) >= 4)
+      .map((r) => r.text);
+
+    const draft = await draftReviewProfile({
+      businessName: qr.businessName,
+      address: details?.address || qr.placeAddress || "",
+      website: details?.website || "",
+      reviews,
+    });
+
+    const profile = sanitizeProfile({ ...draft, staff: qr.reviewProfile?.staff || [], tone: qr.reviewProfile?.tone });
+    res.json({ success: true, profile });
+  } catch (err) {
+    console.error("Autofill review profile error:", err.message);
+    res.status(502).json({ message: "Couldn't draft a profile right now. Please fill it in manually." });
   }
 };
 

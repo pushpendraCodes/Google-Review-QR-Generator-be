@@ -1,7 +1,7 @@
 import { Router } from "express";
 import * as ctrl from "../controllers/users/qr.controller.js";
 import { protect, planGuard, attachPlanLimits } from "../middlewares/auth.middleware.js";
-import { qrGenerateLimiter, aiReviewLimiter } from "../middlewares/rateLimit.middleware.js";
+import { qrGenerateLimiter, aiReviewLimiter, aiProfileDraftLimiter } from "../middlewares/rateLimit.middleware.js";
 
 const router = Router();
 
@@ -26,6 +26,9 @@ router.put("/:id", protect, ctrl.updateQRCode);
 router.delete("/:id", protect, ctrl.deleteQRCode);
 router.get("/:id/download", protect, ctrl.downloadQRCode);
 router.get("/:id/analytics", protect, planGuard("pro"), ctrl.getQRAnalytics);
+router.get("/:id/review-profile", protect, ctrl.getReviewProfile);
+router.put("/:id/review-profile", protect, ctrl.updateReviewProfile);
+router.post("/:id/review-profile/autofill", protect, aiProfileDraftLimiter, ctrl.autofillReviewProfile);
 router.get("/", protect, ctrl.listQRCodes);
 
 

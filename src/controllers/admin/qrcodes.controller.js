@@ -3,6 +3,7 @@ import QRCode from "../../models/QRCode.js";
 import ScanLog from "../../models/ScanLog.js";
 import User from "../../models/User.js";
 import { delCache } from "../../utils/cache.js";
+import { hasProfile } from "../../services/reviewProfile.service.js";
 
 const PLANS = ["free", "starter", "pro", "agency"];
 const SORTS = {
@@ -167,7 +168,7 @@ export const listQRCodes = async (req, res) => {
     const [qrCodes, total] = await Promise.all([
       QRCode.find(filter)
         .populate("owner", "name email businessName plan picture")
-        .select("businessName label placeAddress placeRating totalReviews scanCount status isActive shortCode owner createdAt qrConfig.logoUrl")
+        .select("businessName label placeAddress placeRating totalReviews scanCount status isActive shortCode owner createdAt qrConfig.logoUrl reviewProfile.services.name reviewProfile.highlights")
         .sort(sort)
         .skip(skip)
         .limit(limit)
@@ -192,8 +193,9 @@ export const listQRCodes = async (req, res) => {
     const metaMap = Object.fromEntries(scanMeta.map((m) => [m._id.toString(), m]));
 
     return res.json({
-      qrCodes: qrCodes.map((qr) => ({
+      qrCodes: qrCodes.map(({ reviewProfile, ...qr }) => ({
         ...qr,
+        hasAiProfile: hasProfile(reviewProfile),
         lastScanAt: metaMap[qr._id.toString()]?.lastScanAt || null,
         scans7d: metaMap[qr._id.toString()]?.scans7d || 0,
       })),

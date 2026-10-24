@@ -34,4 +34,12 @@ const aiReviewLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-export { authLimiter, qrGenerateLimiter, paymentLimiter, aiReviewLimiter };
+const aiProfileDraftLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: { message: "Too many auto-fill requests. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+export { authLimiter, qrGenerateLimiter, paymentLimiter, aiReviewLimiter, aiProfileDraftLimiter };

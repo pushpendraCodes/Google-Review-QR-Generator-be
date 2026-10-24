@@ -31,6 +31,23 @@ const agencyBillingSchema = new mongoose.Schema({
   history: [agencyPaymentSchema]
 }, { _id: false });
 
+// What the AI review page asks customers about, and the facts it may use (Pro/Agency).
+const reviewProfileSchema = new mongoose.Schema({
+  category: { type: String, default: "", trim: true, maxlength: 60 },
+  description: { type: String, default: "", trim: true, maxlength: 500 },
+  services: {
+    type: [new mongoose.Schema({
+      name: { type: String, required: true, trim: true, maxlength: 60 },
+      detail: { type: String, default: "", trim: true, maxlength: 140 },
+    }, { _id: false })],
+    default: [],
+  },
+  highlights: { type: [{ type: String, trim: true, maxlength: 40 }], default: [] },
+  staff: { type: [{ type: String, trim: true, maxlength: 30 }], default: [] },
+  tone: { type: String, enum: ["friendly", "professional", "enthusiastic"], default: "friendly" },
+  updatedAt: { type: Date, default: null },
+}, { _id: false });
+
 // ── Main schema ────────────────────────────────────────────────────────────────
 const qrCodeSchema = new mongoose.Schema(
   {
@@ -57,6 +74,7 @@ const qrCodeSchema = new mongoose.Schema(
     // QR customisation (plan-gated, validated in controller)
     qrConfig: { type: qrConfigSchema, default: () => ({}) },
     standeeConfig: { type: standeeConfigSchema, default: () => ({}) },
+    reviewProfile: { type: reviewProfileSchema, default: () => ({}) },
 
     // Agency billing config (for agency plan owners)
     agencyBilling: { type: agencyBillingSchema, default: () => ({ planType: "none", price: 0, nextPaymentDate: null, history: [] }) },

@@ -137,6 +137,7 @@ const canUseFeature = (plan, feature) => {
     svgPdf: ["starter", "pro", "agency"],
     standeeExtras: ["pro", "agency"],  // template, bgColor, socialProof, language
     whiteLabel: ["agency"],
+    aiProfile: ["pro", "agency"],  // personalised AI reviews (services / highlights / staff)
   };
   return gates[feature]?.includes(plan) ?? false;
 };

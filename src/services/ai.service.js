@@ -140,6 +140,111 @@ function pickRandomReviews(reviews, count) {
   return list.slice(0, Math.min(count, list.length));
 }
 
+const LANGUAGE_RULES = {
+  en: "Write in simple, natural English.",
+  hi: "Write in Hindi using Devanagari script, the way people actually type reviews (simple words, not formal).",
+  hinglish: "Write in Hinglish: Hindi words typed in English (Roman) letters mixed with common English words, like Indian customers type on Google.",
+  mr: "Write in Marathi using Devanagari script, the way people actually type reviews (simple everyday Marathi, not formal). Do not write in Hindi.",
+};
+
+const TONE_RULES = {
+  friendly: "warm and casual",
+  professional: "polite and to the point",
+  enthusiastic: "excited and upbeat, but still believable",
+};
+
+const promptList = (items) => items.map((s) => `- ${s}`).join("\n");
+
+function buildPersonalisedPrompt({ businessName, profile, answers, recent }) {
+  const category = profile.category ? ` (${profile.category})` : "";
+  const facts = [];
+  if (profile.description) facts.push(`About the business: ${profile.description}`);
+
+  const services = answers.services.length ? answers.services : [];
+  if (services.length) {
+    facts.push(
+      `Services the customer used:\n${promptList(
+        services.map((s) => (s.detail ? `${s.name} (${s.detail})` : s.name))
+      )}`
+    );
+  }
+  if (answers.liked.length) facts.push(`What the customer liked:\n${promptList(answers.liked)}`);
+  if (answers.staff) facts.push(`Staff member who helped them: ${answers.staff}`);
+  if (!services.length && !answers.liked.length && profile.highlights?.length) {
+    facts.push(`Things this business is known for (mention at most one):\n${promptList(profile.highlights.slice(0, 5))}`);
+  }
+
+  const avoid = recent.length
+    ? `\nOther customers recently got these reviews. Do NOT reuse their openings, phrases or structure:\n${promptList(
+        recent.map((r) => `"${r.slice(0, 110)}"`)
+      )}\n`
+    : "";
+
+  return `You are helping a real, happy customer write their own Google review for "${businessName}"${category}.
+
+${facts.join("\n\n")}
+${avoid}
+Write exactly 3 different 5-star reviews from this customer's point of view (first person):
+1. Short: one sentence.
+2. Medium: two or three sentences.
+3. Detailed: three or four sentences.
+
+Rules:
+- Only use the facts above. Never invent prices, timings, dishes, results, names or events that are not listed.
+- Mention the services and liked points naturally; do not list them all in every review.
+- If a staff member is given, mention them by name in at most two of the reviews.
+- Tone: ${TONE_RULES[profile.tone] || TONE_RULES.friendly}. Sound like a real person, not an advert.
+- Do not start every review the same way, and do not start with the business name.
+- No hashtags, no emojis, no quotation marks around the text.
+- ${LANGUAGE_RULES[answers.language] || LANGUAGE_RULES.en}
+
+Return ONLY a valid JSON array of 3 strings, nothing else.`;
+}
+
+/**
+ * 3 reviews (short, medium, detailed) built from the owner's profile and the
+ * customer's validated answers. Falls back to generic suggestions on AI failure.
+ */
+async function generatePersonalisedReviews({ businessName, businessType = "", profile, answers, recent = [] }) {
+  const prompt = buildPersonalisedPrompt({ businessName, profile, answers, recent });
+  try {
+    const text = await generateTextWithAi(prompt, 700, 0.95);
+    const reviews = parseReviewArray(text, "AI").slice(0, 3);
+    if (reviews.length === 3) return reviews;
+  } catch (err) {
+    console.error("Personalised review generation failed:", err.message);
+  }
+  return generateReviewSuggestions({ businessName, businessType });
+}
+
+/** AI-drafted profile from Google data, for the owner to edit before saving. */
+async function draftReviewProfile({ businessName, address = "", website = "", reviews = [] }) {
+  const reviewText = reviews
+    .map((r) => String(r || "").trim())
+    .filter(Boolean)
+    .slice(0, 8)
+    .map((r) => `- ${r.slice(0, 300)}`)
+    .join("\n");
+
+  const prompt = `You are setting up a business profile used to help customers write Google reviews.
+
+Business: "${businessName}"
+${address ? `Address: ${address}\n` : ""}${website ? `Website: ${website}\n` : ""}${reviewText ? `Recent Google reviews:\n${reviewText}\n` : ""}
+Based only on this information and what a business of this kind normally offers, return a JSON object:
+{
+  "category": "short business category, e.g. Dental clinic",
+  "description": "one or two plain sentences about the business, no claims you cannot see above",
+  "services": [{ "name": "service name (max 5 words)", "detail": "optional short detail" }],
+  "highlights": ["short things customers praise, max 4 words each"]
+}
+Give 4-8 services and 4-6 highlights. Do not include staff names. Return ONLY the JSON object.`;
+
+  const text = await generateTextWithAi(prompt, 700, 0.4);
+  const match = String(text || "").match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Could not parse AI profile draft");
+  return JSON.parse(match[0]);
+}
+
 function buildOwnerReplyPrompt({
   businessName,
   reviewerName,
@@ -155,25 +260,25 @@ Review: "${reviewText || "(No written comment)"}"
 Write ONE professional, warm owner reply (2-4 sentences). Thank the customer, address specific points when mentioned, and stay authentic. For low ratings, apologize sincerely and invite them to contact you offline to resolve the issue. Do not use placeholders like [Business Name]. Do not include markdown or quotes around the reply. Return ONLY the reply text.`;
 }
 
-async function generateTextWithAi(prompt, maxTokens = 280) {
+async function generateTextWithAi(prompt, maxTokens = 280, temperature = 0.7) {
   const openRouterKey = env("OPENROUTER_API_KEY");
   const geminiKey = env("GEMINI_API_KEY");
 
   if (openRouterKey) {
     try {
       return await generateTextWithOpenRouter(prompt, openRouterKey, {
-        temperature: 0.7,
+        temperature,
         maxTokens,
       });
     } catch (err) {
-      console.error("OpenRouter owner-reply failed:", err.message);
+      console.error("OpenRouter request failed:", err.message);
       if (!geminiKey) throw err;
     }
   }
 
   if (geminiKey) {
     return generateTextWithGemini(prompt, geminiKey, {
-      temperature: 0.7,
+      temperature,
       maxTokens,
     });
   }
@@ -296,4 +401,9 @@ async function generateOwnerReplySuggestion({
   return reply;
 }
 
-export { generateReviewSuggestions, generateOwnerReplySuggestion };
+export {
+  generateReviewSuggestions,
+  generateOwnerReplySuggestion,
+  generatePersonalisedReviews,
+  draftReviewProfile,
+};
