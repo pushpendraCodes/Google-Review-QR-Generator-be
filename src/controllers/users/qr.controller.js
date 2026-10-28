@@ -803,7 +803,7 @@ export const autofillReviewProfile = async (req, res) => {
       reviews,
     });
 
-    const profile = sanitizeProfile({ ...draft, staff: qr.reviewProfile?.staff || [], tone: qr.reviewProfile?.tone });
+    const profile = sanitizeProfile({ ...draft, staff: qr.reviewProfile?.staff || [], tone: qr.reviewProfile?.tone, languages: qr.reviewProfile?.languages });
     res.json({ success: true, profile });
   } catch (err) {
     console.error("Autofill review profile error:", err.message);

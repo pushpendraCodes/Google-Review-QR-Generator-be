@@ -1,4 +1,5 @@
 import { getCache, setCache } from "../utils/cache.js";
+import { LANGUAGE_RULES } from "../config/reviewLanguages.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -140,13 +141,6 @@ function pickRandomReviews(reviews, count) {
   return list.slice(0, Math.min(count, list.length));
 }
 
-const LANGUAGE_RULES = {
-  en: "Write in simple, natural English.",
-  hi: "Write in Hindi using Devanagari script, the way people actually type reviews (simple words, not formal).",
-  hinglish: "Write in Hinglish: Hindi words typed in English (Roman) letters mixed with common English words, like Indian customers type on Google.",
-  mr: "Write in Marathi using Devanagari script, the way people actually type reviews (simple everyday Marathi, not formal). Do not write in Hindi.",
-};
-
 const TONE_RULES = {
   friendly: "warm and casual",
   professional: "polite and to the point",
@@ -208,7 +202,7 @@ Return ONLY a valid JSON array of 3 strings, nothing else.`;
 async function generatePersonalisedReviews({ businessName, businessType = "", profile, answers, recent = [] }) {
   const prompt = buildPersonalisedPrompt({ businessName, profile, answers, recent });
   try {
-    const text = await generateTextWithAi(prompt, 700, 0.95);
+    const text = await generateTextWithAi(prompt, answers.language === "en" ? 700 : 1400, 0.95);
     const reviews = parseReviewArray(text, "AI").slice(0, 3);
     if (reviews.length === 3) return reviews;
   } catch (err) {

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { DEFAULT_LANGUAGES, REVIEW_LANGUAGES } from "../config/reviewLanguages.js";
 
 // ── Sub-schemas ────────────────────────────────────────────────────────────────
 const qrConfigSchema = new mongoose.Schema({
@@ -45,6 +46,10 @@ const reviewProfileSchema = new mongoose.Schema({
   highlights: { type: [{ type: String, trim: true, maxlength: 40 }], default: [] },
   staff: { type: [{ type: String, trim: true, maxlength: 30 }], default: [] },
   tone: { type: String, enum: ["friendly", "professional", "enthusiastic"], default: "friendly" },
+  languages: {
+    type: [{ type: String, enum: REVIEW_LANGUAGES }],
+    default: () => [...DEFAULT_LANGUAGES],
+  },
   updatedAt: { type: Date, default: null },
 }, { _id: false });
 

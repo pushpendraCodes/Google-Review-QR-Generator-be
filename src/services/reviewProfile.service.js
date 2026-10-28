@@ -1,4 +1,5 @@
 import { canUseFeature } from "../utils/helpers.js";
+import { DEFAULT_LANGUAGES, REVIEW_LANGUAGES } from "../config/reviewLanguages.js";
 
 export const PROFILE_LIMITS = {
   services: 30,
@@ -9,7 +10,7 @@ export const PROFILE_LIMITS = {
 };
 
 export const REVIEW_TONES = ["friendly", "professional", "enthusiastic"];
-export const REVIEW_LANGUAGES = ["en", "hi", "hinglish", "mr"];
+export { REVIEW_LANGUAGES };
 
 export const DEFAULT_LIKED = [
   "Friendly staff",
@@ -56,7 +57,15 @@ export function sanitizeProfile(input = {}) {
     highlights: uniqueList(input.highlights, PROFILE_LIMITS.highlights, 40),
     staff: uniqueList(input.staff, PROFILE_LIMITS.staff, 30),
     tone: REVIEW_TONES.includes(input.tone) ? input.tone : "friendly",
+    languages: profileLanguages(input),
   };
+}
+
+/** Languages the owner allows, in canonical order; the defaults when unset or empty. */
+export function profileLanguages(profile) {
+  const picked = Array.isArray(profile?.languages) ? profile.languages : [];
+  const out = REVIEW_LANGUAGES.filter((l) => picked.includes(l));
+  return out.length ? out : [...DEFAULT_LANGUAGES];
 }
 
 export const hasProfile = (profile) =>
@@ -71,6 +80,7 @@ export function buildQuestions(profile) {
     services: (profile.services || []).map((s) => s.name),
     liked: uniqueList([...(profile.highlights || []), ...DEFAULT_LIKED], 10, 40),
     staff: profile.staff || [],
+    languages: profileLanguages(profile),
   };
 }
 
@@ -94,7 +104,7 @@ export function validateAnswers(profile, answers = {}) {
     services: (profile.services || []).filter((s) => serviceNames.includes(s.name)),
     liked: pick(answers.liked, questions.liked, PROFILE_LIMITS.pickLiked),
     staff: staffName,
-    language: REVIEW_LANGUAGES.includes(answers.language) ? answers.language : "en",
+    language: questions.languages.includes(answers.language) ? answers.language : questions.languages[0],
   };
 }
 
