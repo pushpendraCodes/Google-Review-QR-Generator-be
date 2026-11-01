@@ -5,6 +5,7 @@ import DailyMetric from "../../models/DailyMetric.js";
 import { getCache, setCache } from "../../utils/cache.js";
 import { isGoogleDataStale, refreshQrsFromGoogle } from "../../services/googleSync.service.js";
 import { signClientToken, resolveClientAgency } from "../../services/clientAuth.service.js";
+import { sanitizeStandeeDisplay } from "../../config/standee.js";
 import mongoose from "mongoose";
 import PaymentClaim from "../../models/PaymentClaim.js";
 import AgencyPaymentSettings from "../../models/AgencyPaymentSettings.js";
@@ -210,6 +211,8 @@ export const getSummary = async (req, res) => {
           bgColor: q.standeeConfig?.bgColor || "",
           socialProof: q.standeeConfig?.socialProof || "",
           language: q.standeeConfig?.language || "en",
+          phone: q.standeeConfig?.phone || "",
+          display: sanitizeStandeeDisplay(q.standeeConfig?.display),
           whiteLabel: {
             enabled: Boolean(q.standeeConfig?.whiteLabel?.enabled),
             clientName: q.standeeConfig?.whiteLabel?.clientName || "",

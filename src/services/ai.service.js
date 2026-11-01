@@ -163,7 +163,8 @@ function buildPersonalisedPrompt({ businessName, profile, answers, recent }) {
     );
   }
   if (answers.liked.length) facts.push(`What the customer liked:\n${promptList(answers.liked)}`);
-  if (answers.staff) facts.push(`Staff member who helped them: ${answers.staff}`);
+  if (answers.staff.length === 1) facts.push(`Staff member who helped them: ${answers.staff[0]}`);
+  if (answers.staff.length > 1) facts.push(`Staff members who helped them:\n${promptList(answers.staff)}`);
   if (!services.length && !answers.liked.length && profile.highlights?.length) {
     facts.push(`Things this business is known for (mention at most one):\n${promptList(profile.highlights.slice(0, 5))}`);
   }
@@ -186,7 +187,7 @@ Write exactly 3 different 5-star reviews from this customer's point of view (fir
 Rules:
 - Only use the facts above. Never invent prices, timings, dishes, results, names or events that are not listed.
 - Mention the services and liked points naturally; do not list them all in every review.
-- If a staff member is given, mention them by name in at most two of the reviews.
+- If staff members are given, thank them by name: mention every one of them across the reviews, and name all of them together in at least one review. Use only the names exactly as given; never invent roles or job titles for them.
 - Tone: ${TONE_RULES[profile.tone] || TONE_RULES.friendly}. Sound like a real person, not an advert.
 - Do not start every review the same way, and do not start with the business name.
 - No hashtags, no emojis, no quotation marks around the text.

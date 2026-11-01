@@ -7,6 +7,7 @@ export const PROFILE_LIMITS = {
   staff: 20,
   pickServices: 3,
   pickLiked: 4,
+  pickStaff: 3,
 };
 
 export const REVIEW_TONES = ["friendly", "professional", "enthusiastic"];
@@ -98,14 +99,16 @@ export function validateAnswers(profile, answers = {}) {
   };
 
   const serviceNames = pick(answers.services, questions.services, PROFILE_LIMITS.pickServices);
-  const staffName = pick([answers.staff], questions.staff, 1)[0] || "";
+  // Older clients send a single name as a string.
+  const staffInput = Array.isArray(answers.staff) ? answers.staff : [answers.staff];
+  const staffNames = pick(staffInput, questions.staff, PROFILE_LIMITS.pickStaff);
 
   return {
     services: (profile.services || []).filter((s) => serviceNames.includes(s.name)),
     liked: pick(answers.liked, questions.liked, PROFILE_LIMITS.pickLiked),
-    staff: staffName,
+    staff: staffNames,
     language: questions.languages.includes(answers.language) ? answers.language : questions.languages[0],
   };
 }
 
-export const hasAnswers = (a) => Boolean(a.services.length || a.liked.length || a.staff);
+export const hasAnswers = (a) => Boolean(a.services.length || a.liked.length || a.staff.length);

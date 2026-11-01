@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { DEFAULT_LANGUAGES, REVIEW_LANGUAGES } from "../config/reviewLanguages.js";
+import { DEFAULT_STANDEE_DISPLAY, STANDEE_TEMPLATES } from "../config/standee.js";
 
 // ── Sub-schemas ────────────────────────────────────────────────────────────────
 const qrConfigSchema = new mongoose.Schema({
@@ -9,9 +10,17 @@ const qrConfigSchema = new mongoose.Schema({
 }, { _id: false });
 
 const standeeConfigSchema = new mongoose.Schema({
-  template: { type: String, enum: ["minimal", "luxury", "bold", "festive"], default: "minimal" },
+  template: { type: String, enum: STANDEE_TEMPLATES, default: "minimal" },
   bgColor: { type: String, default: "" },
   socialProof: { type: String, default: "" },
+  phone: { type: String, default: "", maxlength: 25 },
+  display: {
+    logo: { type: Boolean, default: DEFAULT_STANDEE_DISPLAY.logo },
+    rating: { type: Boolean, default: DEFAULT_STANDEE_DISPLAY.rating },
+    address: { type: Boolean, default: DEFAULT_STANDEE_DISPLAY.address },
+    phone: { type: Boolean, default: DEFAULT_STANDEE_DISPLAY.phone },
+    nfc: { type: Boolean, default: DEFAULT_STANDEE_DISPLAY.nfc },
+  },
   language: { type: String, enum: ["en", "hi", "mr", "ta", "te"], default: "en" },
   whiteLabel: {
     enabled: { type: Boolean, default: false },

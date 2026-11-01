@@ -21,6 +21,12 @@ import {
   validateAnswers,
 } from "../../services/reviewProfile.service.js";
 import { refreshQrFromGoogle } from "../../services/googleSync.service.js";
+import {
+  DEFAULT_STANDEE_DISPLAY,
+  sanitizeStandeeDisplay,
+  sanitizeStandeePhone,
+  sanitizeStandeeTemplate,
+} from "../../config/standee.js";
 import { qrScope, invalidateQrCaches } from "../../services/team.service.js";
 import { notifyOwnerOfStaffAction } from "../../services/agencyNotify.service.js";
 import { STOP_FIELDS, isQrPaused, planGraceInfo, qrStopBlock, startFreeTrialIfNeeded, syncPlanPause } from "../../services/planGrace.service.js";
@@ -92,6 +98,8 @@ export const generateQR = async (req, res) => {
       socialProof = "",
       language = "en",
       whiteLabel = { enabled: false, clientName: "" },
+      display,
+      phone,
     } = req.body;
 
     if (!placeId) return res.status(400).json({ success: false, message: "placeId is required." });
@@ -145,8 +153,11 @@ export const generateQR = async (req, res) => {
       logoUrl: "",  // filled below if logo uploaded
     };
 
+    const canDisplay = canUseFeature(plan, "standeeDisplay");
     const standeeConfig = {
-      template: canUseFeature(plan, "standeeExtras") ? template : "minimal",
+      template: canUseFeature(plan, "standeeExtras") ? sanitizeStandeeTemplate(template) : "minimal",
+      display: canDisplay ? sanitizeStandeeDisplay(display) : { ...DEFAULT_STANDEE_DISPLAY },
+      phone: canDisplay ? sanitizeStandeePhone(phone) : "",
       bgColor: canUseFeature(plan, "standeeExtras") ? bgColor : "",
       socialProof: canUseFeature(plan, "standeeExtras") ? socialProof : "",
       language: canUseFeature(plan, "standeeExtras") ? language : "en",
@@ -407,7 +418,7 @@ export const updateQRCode = async (req, res) => {
       // qrConfig fields
       color, shape, logoData,
       // standeeConfig fields
-      template, bgColor, socialProof, language, whiteLabel,
+      template, bgColor, socialProof, language, whiteLabel, display, phone,
     } = req.body;
 
     if (!mongoose.isValidObjectId(req.params.id)) {
@@ -448,10 +459,15 @@ export const updateQRCode = async (req, res) => {
 
     // ── Standee config ────────────────────────────────────────────────────────
     if (canUseFeature(plan, "standeeExtras")) {
-      if (template !== undefined) qr.standeeConfig.template = template;
+      if (template !== undefined) qr.standeeConfig.template = sanitizeStandeeTemplate(template);
       if (bgColor !== undefined) qr.standeeConfig.bgColor = bgColor;
       if (socialProof !== undefined) qr.standeeConfig.socialProof = socialProof;
       if (language !== undefined) qr.standeeConfig.language = language;
+    }
+
+    if (canUseFeature(plan, "standeeDisplay")) {
+      if (display !== undefined) qr.standeeConfig.display = sanitizeStandeeDisplay(display, qr.standeeConfig.display);
+      if (phone !== undefined) qr.standeeConfig.phone = sanitizeStandeePhone(phone);
     }
 
     if (whiteLabel !== undefined && canUseFeature(plan, "whiteLabel")) {

@@ -136,6 +136,7 @@ const canUseFeature = (plan, feature) => {
     logo: ["pro", "agency"],
     svgPdf: ["starter", "pro", "agency"],
     standeeExtras: ["pro", "agency"],  // template, bgColor, socialProof, language
+    standeeDisplay: ["starter", "pro", "agency"],  // show/hide rating, address, phone, NFC badge
     whiteLabel: ["agency"],
     aiProfile: ["pro", "agency"],  // personalised AI reviews (services / highlights / staff)
   };
